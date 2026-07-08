@@ -1,166 +1,166 @@
-# SC1777Y Driver Design
+# SC1777Y 驱动设计
 
-## Goal
+## 目标
 
-Add a Zephyr driver for the SC1777Y security chip, a byte-level SPI emulator, and a native_sim sample that validates every documented interaction through the driver's semantic API.
+为 SC1777Y 安全芯片增加 Zephyr 驱动、字节级 SPI 模拟器，以及一个基于 native_sim 的 sample。sample 通过驱动提供的语义接口验证资料中所有交互流程。
 
-## Scope
+## 范围
 
-The driver implements the SC1777Y SPI command protocol from the product manual and exposes semantic APIs for the interaction flows in chapter 5. Applications and samples do not construct command frames, CLA/INS values, LRC bytes, polling bytes, or retry loops.
+驱动实现产品说明书中的 SC1777Y SPI 命令协议，并为第 5 章交互流程提供语义 API。应用和 sample 不构造命令帧，不设置 CLA/INS，不计算 LRC，也不处理查询字节或重发循环。
 
-The emulator is a protocol-level deterministic model. It validates SC1777Y SPI framing and returns predictable data for cryptographic operations, but it does not implement real SM1, SM2, SM3, SM4, or SM7 algorithms.
+模拟器是协议级确定性模型。它校验 SC1777Y SPI 字节帧，并为密码运算返回可预测数据，但不实现真实 SM1、SM2、SM3、SM4 或 SM7 算法。
 
-## Architecture
+## 架构
 
-### Public Driver API
+### 公共驱动 API
 
-Create `include/zephyr/drivers/misc/sc1777y.h`.
+新增 `include/zephyr/drivers/misc/sc1777y.h`。
 
-The header exposes:
+该头文件提供：
 
-- Status definitions for SC1777Y status words.
-- Bounded buffer constants for command input and output.
-- Enumerations for sensor model type and platform type.
-- Semantic functions for chapter 5 flows.
-- One low-level escape hatch, `sc1777y_command()`, for users who need an unsupported command while still using the driver's transport handling.
+- SC1777Y 状态字定义。
+- 命令输入和输出的有界缓冲区常量。
+- 传感器型号类型和平台类型枚举。
+- 第 5 章交互流程对应的语义函数。
+- 一个低层兜底接口 `sc1777y_command()`，供用户访问尚未封装的芯片命令，同时继续复用驱动的传输处理。
 
-The public API is organized by user intent:
+公共 API 按用户意图组织：
 
-- Basic chip information: get version info, serial number, key version, random data.
-- Terminal/sensor authentication: begin authentication, fetch peer information, encrypt peer challenge, verify peer authentication response.
-- Terminal/sensor business data: encrypt and decrypt sensor-to-terminal and terminal-to-sensor payloads.
-- Field key update: get update identity material, verify update authentication ciphertext, fetch update random, apply key update data.
-- Platform setup: import platform public key, import AK, import IV, set and get platform type.
-- Certificate request: generate SM2 keypair, generate certificate request.
-- Session negotiation: begin session, hash request/response body, sign hash, verify response signature, generate auth response, confirm session.
-- Session payload crypto: generate IV random, encrypt, decrypt.
+- 芯片基础信息：获取版本信息、序列号、密钥版本、随机数。
+- 终端与传感器身份认证：发起认证、获取对端信息、加密对端挑战、验证对端认证响应。
+- 终端与传感器业务数据：加密和解密传感器到终端、终端到传感器的业务载荷。
+- 现场密钥更新：获取更新身份材料、验证更新认证密文、获取更新随机数、写入密钥更新数据。
+- 平台配置：导入平台公钥、导入 AK、导入 IV、设置和读取平台类型。
+- 证书请求：生成 SM2 密钥对、生成证书请求。
+- 会话协商：会话发起、请求/应答报文 Hash、签名、验签、生成安全认证响应、确认会话。
+- 会话载荷加解密：生成 IV 随机数、加密、解密。
 
-### Private Transport Layer
+### 私有传输层
 
-Create `drivers/misc/sc1777y/sc1777y.c`.
+新增 `drivers/misc/sc1777y/sc1777y.c`。
 
-The private transport layer owns:
+私有传输层负责：
 
-- SPI mode 3 configuration.
-- Command frame construction: `55 CLA INS P1 P2 Len1 Len2 DATA LRC1`.
-- LRC calculation by XORing bytes and inverting the result.
-- Command completion polling by reading until `0x55`.
-- Response frame parsing: `SW1 SW2 Len1 Len2 DATA LRC2`.
-- Receive LRC validation.
-- Retry handling for send LRC errors (`6A90`) and receive LRC failures, up to 3 attempts.
-- Mapping chip status words to negative errno values while preserving the raw status in a caller-visible result structure where useful.
+- 配置 SPI mode 3。
+- 构造命令帧：`55 CLA INS P1 P2 Len1 Len2 DATA LRC1`。
+- 按字节异或后取反计算 LRC。
+- 通过读取直到 `0x55` 来查询命令执行完成。
+- 解析响应帧：`SW1 SW2 Len1 Len2 DATA LRC2`。
+- 校验响应 LRC。
+- 对发送 LRC 错误状态 `6A90` 和接收 LRC 错误执行重发，最多 3 次。
+- 将芯片状态字映射为负 errno，同时在需要时通过结果结构保留原始 `sw1`、`sw2`。
 
-The transport layer is not exposed as a generic SPI helper. It remains private to this driver because the timing, polling, LRC, and status model are specific to SC1777Y.
+传输层不暴露为通用 SPI helper。它保持为 SC1777Y 驱动私有实现，因为时序、查询、LRC 和状态模型都属于该芯片协议。
 
-### Emulator
+### 模拟器
 
-Create `drivers/misc/sc1777y/sc1777y_emul.c` and a private emulator header used by tests.
+新增 `drivers/misc/sc1777y/sc1777y_emul.c`，以及供测试使用的私有模拟器头文件。
 
-The emulator registers as a SPI emulator on `zephyr,spi-emul-controller`. It:
+模拟器注册为 `zephyr,spi-emul-controller` 下的 SPI emulator。它负责：
 
-- Accepts only SC1777Y command frames.
-- Validates the command header, length, and LRC at byte level.
-- Returns `6A90` for command LRC errors.
-- Implements the documented status words for malformed or unsupported commands.
-- Models command completion polling by returning non-ready bytes before `0x55` when configured to do so.
-- Produces deterministic payloads for all semantic API commands.
-- Provides test controls for injecting receive LRC corruption, delayed readiness, specific status words, and fixed response payloads.
+- 只接受 SC1777Y 命令帧。
+- 按字节校验命令头、长度和 LRC。
+- 对命令 LRC 错误返回 `6A90`。
+- 对畸形命令或不支持命令返回资料中定义的状态字。
+- 通过可配置的非就绪字节和最终 `0x55` 模拟命令完成查询。
+- 为所有语义 API 命令生成确定性响应载荷。
+- 提供测试控制能力，用于注入响应 LRC 错误、延迟就绪、指定状态字和固定响应载荷。
 
-The emulator stores simple state required by the flows: chip serial number, key version bytes, platform type, imported public key presence, generated SM2 keypair flag, session started flag, IV, AK, and key-update authentication flag.
+模拟器保存流程所需的简单状态：芯片序列号、密钥版本字节、平台类型、是否已导入平台公钥、是否已生成 SM2 密钥对、会话是否已发起、IV、AK、密钥更新认证状态。
 
-### Devicetree And Kconfig
+### Devicetree 和 Kconfig
 
-Add bindings:
+新增绑定：
 
-- `dts/bindings/misc/sc1777y.yaml` for common device properties.
-- `dts/bindings/misc/sc1777y-spi.yaml` including `spi-device.yaml`.
+- `dts/bindings/misc/sc1777y.yaml` 定义公共设备属性。
+- `dts/bindings/misc/sc1777y-spi.yaml` 引入 `spi-device.yaml`。
 
-Add Kconfig and build integration under `drivers/misc/sc1777y`:
+在 `drivers/misc/sc1777y` 下新增 Kconfig 和构建集成：
 
-- `CONFIG_SC1777Y` depends on `DT_HAS_*_SC1777Y_ENABLED` and selects `SPI`.
-- `CONFIG_EMUL_SC1777Y` depends on `SC1777Y` and `EMUL`.
+- `CONFIG_SC1777Y` 依赖 `DT_HAS_*_SC1777Y_ENABLED`，并选择 `SPI`。
+- `CONFIG_EMUL_SC1777Y` 依赖 `SC1777Y` 和 `EMUL`。
 
-Register `drivers/misc/sc1777y` from `drivers/misc/CMakeLists.txt` and source its Kconfig from `drivers/misc/Kconfig`.
+从 `drivers/misc/CMakeLists.txt` 注册 `drivers/misc/sc1777y`，并从 `drivers/misc/Kconfig` 引入该驱动的 Kconfig。
 
-### Tests
+### 测试
 
-Create `tests/drivers/misc/sc1777y`.
+新增 `tests/drivers/misc/sc1777y`。
 
-Tests are written before implementation and run on native_sim. They verify:
+测试先于实现编写，并在 native_sim 上运行。测试覆盖：
 
-- LRC calculation and command framing.
-- SPI mode and device readiness.
-- Polling until `0x55`.
-- Receive LRC validation and retry.
-- Send LRC error retry on `6A90`.
-- Unknown command and malformed length handling.
-- Every public semantic API emits the expected chip command and parses the deterministic emulator response.
-- Application-facing APIs reject NULL pointers, undersized buffers, invalid payload lengths, and unsupported enum values.
+- LRC 计算和命令组帧。
+- SPI mode 和设备 ready 检查。
+- 查询直到 `0x55`。
+- 响应 LRC 校验和重发。
+- 发送 LRC 错误 `6A90` 的重发。
+- 未知命令和畸形长度处理。
+- 每个公共语义 API 都发出预期芯片命令，并能解析模拟器确定性响应。
+- 面向应用的 API 会拒绝 NULL 指针、过小缓冲区、非法载荷长度和不支持的枚举值。
 
-The tests include byte-level emulator assertions so regressions in CLA/INS/P1/P2/length encoding are caught even when semantic API calls still return success.
+测试包含字节级模拟器断言。这样即使语义 API 仍返回成功，CLA/INS/P1/P2/长度编码的回归也会被捕获。
 
 ### Sample
 
-Create `samples/drivers/sc1777y`.
+新增 `samples/drivers/sc1777y`。
 
-The sample uses native_sim with an overlay that places an SC1777Y node under `spi0`.
+sample 使用 native_sim，并通过 overlay 在 `spi0` 下挂载一个 SC1777Y 节点。
 
-The sample only calls public semantic API functions. It does not:
+sample 只调用公共语义 API。sample 不做以下事情：
 
-- Construct APDU-like command bytes.
-- Set CLA, INS, P1, or P2 directly.
-- Calculate LRC.
-- Poll for `0x55`.
-- Retry SPI transfers itself.
+- 构造类似 APDU 的命令字节。
+- 直接设置 CLA、INS、P1 或 P2。
+- 计算 LRC。
+- 查询 `0x55`。
+- 自行重试 SPI 传输。
 
-The sample runs a readable smoke flow:
+sample 执行一条可读的 smoke 流程：
 
-1. Read chip version, serial number, key version, and random bytes.
-2. Run terminal/sensor authentication through semantic API calls.
-3. Encrypt and decrypt terminal/sensor business payloads.
-4. Run field key update authentication and key update data application.
-5. Configure platform public key, AK, IV, and platform type.
-6. Generate SM2 keypair and certificate request.
-7. Run session negotiation calls: begin, hash, sign, verify, auth, confirm.
-8. Encrypt and decrypt session payloads.
+1. 读取芯片版本、序列号、密钥版本和随机数。
+2. 通过语义 API 执行终端与传感器身份认证。
+3. 加密和解密终端与传感器业务载荷。
+4. 执行现场密钥更新认证，并写入密钥更新数据。
+5. 配置平台公钥、AK、IV 和平台类型。
+6. 生成 SM2 密钥对和证书请求。
+7. 执行会话协商调用：发起、Hash、签名、验签、安全认证、确认。
+8. 加密和解密会话载荷。
 
-The sample asserts expected deterministic emulator responses and prints concise PASS lines for each semantic group.
+sample 断言模拟器的确定性响应，并为每个语义分组打印简洁的 PASS 行。
 
-## Error Handling
+## 错误处理
 
-Public APIs return `0` on `9000`. Non-success chip statuses return negative errno:
+公共 API 在芯片返回 `9000` 时返回 `0`。非成功状态字映射为负 errno：
 
-- `6A90` maps to retry while attempts remain, then `-EIO`.
-- Invalid arguments map to `-EINVAL`.
-- Unsupported chip commands map to `-ENOTSUP`.
-- Security/authentication failures map to `-EACCES`.
-- Timeout waiting for `0x55` maps to `-ETIMEDOUT`.
-- SPI bus failures map to the underlying SPI errno when available.
+- `6A90` 在还有重试次数时触发重试，耗尽后返回 `-EIO`。
+- 调用参数非法返回 `-EINVAL`。
+- 芯片不支持的命令返回 `-ENOTSUP`。
+- 安全状态或认证失败返回 `-EACCES`。
+- 等待 `0x55` 超时返回 `-ETIMEDOUT`。
+- SPI 总线错误尽量透传底层 SPI errno。
 
-APIs that need the exact chip status use a result structure containing `sw1` and `sw2`, so callers can distinguish chip-specific failures without parsing transport frames.
+需要精确芯片状态的 API 使用包含 `sw1` 和 `sw2` 的结果结构，让调用者无需解析传输帧即可区分芯片侧失败。
 
-## Data Limits
+## 数据限制
 
-The driver supports SC1777Y payloads large enough for all documented commands:
+驱动支持资料中所有命令所需的 SC1777Y 载荷长度：
 
-- General response data up to 2048 bytes for session encryption and decryption.
-- Fixed-size outputs for serial number, random data, hashes, signatures, encrypted random values, auth response data, and session key digest.
-- Input validation for documented block-size rules: sensor business data is an 8-byte multiple, session payload crypto is a 16-byte multiple from 16 to 2048 bytes.
+- 会话加解密的通用响应数据最大 2048 字节。
+- 序列号、随机数、Hash、签名、加密随机数、安全认证数据、会话密钥摘要等固定长度输出。
+- 按资料约束校验块大小：传感器业务数据为 8 字节整数倍，会话载荷加解密为 16 字节整数倍，长度范围 16 到 2048 字节。
 
-Buffer sizes are explicit in the API. The driver never writes past caller-provided buffers and reports required sizes when output buffers are too small.
+API 明确传入缓冲区大小。驱动不会越界写调用者缓冲区，并在输出缓冲区过小时报告所需长度。
 
-## Non-Goals
+## 非目标
 
-- Implementing real SM1, SM2, SM3, SM4, or SM7 in the emulator.
-- Replacing Zephyr's generic crypto API.
-- Making sample code construct SC1777Y command frames.
-- Supporting I2C or UART transports.
-- Modeling hardware power sequencing beyond device readiness and SPI command behavior.
+- 在模拟器中实现真实 SM1、SM2、SM3、SM4 或 SM7。
+- 替代 Zephyr 通用 crypto API。
+- 让 sample 构造 SC1777Y 命令帧。
+- 支持 I2C 或 UART 传输。
+- 在设备 ready 和 SPI 命令行为之外模拟硬件电源时序。
 
-## Acceptance Criteria
+## 验收标准
 
-- The driver builds for native_sim.
-- The emulator validates SC1777Y SPI frames at byte level.
-- Tests cover all public semantic APIs and transport retry/error paths.
-- The sample mounts the emulator on native_sim and validates all chapter 5 interactions through semantic API calls only.
-- No sample code contains SC1777Y CLA/INS command literals or LRC handling.
+- 驱动可以为 native_sim 构建。
+- 模拟器按字节级校验 SC1777Y SPI 帧。
+- 测试覆盖全部公共语义 API 和传输层重试/错误路径。
+- sample 在 native_sim 上挂载模拟器，并只通过语义 API 验证第 5 章全部交互。
+- sample 代码不包含 SC1777Y CLA/INS 命令字面量，也不包含 LRC 处理。
