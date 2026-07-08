@@ -85,30 +85,27 @@ ZTEST_F(sc1777y, test_ready_timeout_returns_etimedout)
 
 ZTEST_F(sc1777y, test_6d00_maps_to_enotsup)
 {
-	const struct sc1777y_command cmd = {.cla = 0x00, .ins = 0x84, .p1 = 0x00, .p2 = 0x04};
 	uint8_t out[4];
-	size_t out_len = 0U;
-	struct sc1777y_status status;
 
 	sc1777y_emul_set_next_status(fixture->emul, 0x6D, 0x00);
-	zassert_equal(-ENOTSUP,
-		      sc1777y_command(fixture->dev, &cmd, out, sizeof(out), &out_len, &status));
-	zassert_equal(0x6D, status.sw1);
-	zassert_equal(0x00, status.sw2);
+	zassert_equal(-ENOTSUP, sc1777y_get_random(fixture->dev, out, sizeof(out)));
+	zassert_equal(1, sc1777y_emul_get_command_count(fixture->emul));
+}
+
+ZTEST_F(sc1777y, test_semantic_api_maps_6300_to_eacces)
+{
+	uint8_t out[4];
+
+	sc1777y_emul_set_next_status(fixture->emul, 0x63, 0x00);
+	zassert_equal(-EACCES, sc1777y_get_random(fixture->dev, out, sizeof(out)));
 	zassert_equal(1, sc1777y_emul_get_command_count(fixture->emul));
 }
 
 ZTEST_F(sc1777y, test_repeated_6a90_returns_eio_after_three_attempts)
 {
-	const struct sc1777y_command cmd = {.cla = 0x00, .ins = 0x84, .p1 = 0x00, .p2 = 0x04};
 	uint8_t out[4];
-	size_t out_len = 0U;
-	struct sc1777y_status status;
 
 	sc1777y_emul_set_status_repeat(fixture->emul, 0x6A, 0x90, 3U);
-	zassert_equal(-EIO,
-		      sc1777y_command(fixture->dev, &cmd, out, sizeof(out), &out_len, &status));
-	zassert_equal(0x6A, status.sw1);
-	zassert_equal(0x90, status.sw2);
+	zassert_equal(-EIO, sc1777y_get_random(fixture->dev, out, sizeof(out)));
 	zassert_equal(3, sc1777y_emul_get_command_count(fixture->emul));
 }
