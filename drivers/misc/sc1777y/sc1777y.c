@@ -25,6 +25,7 @@ struct sc1777y_config {
 #define SC1777Y_SENSOR_AUTH_RAND_LEN 4U
 #define SC1777Y_SENSOR_BLOCK_LEN 8U
 #define SC1777Y_SENSOR_ID_LEN 8U
+#define SC1777Y_UPDATE_AUTH_ENCRYPTED_LEN 8U
 
 static int sc1777y_command_expect_len(const struct device *dev, const struct sc1777y_command *cmd,
 				      uint8_t *out, size_t len)
@@ -38,6 +39,19 @@ static int sc1777y_command_expect_len(const struct device *dev, const struct sc1
 	}
 
 	return out_len == len ? 0 : -EIO;
+}
+
+static int sc1777y_command_expect_empty(const struct device *dev, const struct sc1777y_command *cmd)
+{
+	size_t out_len;
+	int ret;
+
+	ret = sc1777y_command(dev, cmd, NULL, 0U, &out_len, NULL);
+	if (ret != 0) {
+		return ret;
+	}
+
+	return out_len == 0U ? 0 : -EIO;
 }
 
 static int sc1777y_sensor_auth_p2(enum sc1777y_sensor_type type, uint8_t *p2)
@@ -565,6 +579,42 @@ int sc1777y_get_update_identity(const struct device *dev, struct sc1777y_identit
 	}
 
 	return sc1777y_command_expect_len(dev, &cmd, (uint8_t *)identity, sizeof(*identity));
+}
+
+int sc1777y_verify_update_auth(const struct device *dev, const uint8_t encrypted8[8])
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x00,
+		.ins = 0x82,
+		.p1 = 0x00,
+		.p2 = 0x02,
+		.data = encrypted8,
+		.data_len = SC1777Y_UPDATE_AUTH_ENCRYPTED_LEN,
+	};
+
+	if (encrypted8 == NULL) {
+		return -EINVAL;
+	}
+
+	return sc1777y_command_expect_empty(dev, &cmd);
+}
+
+int sc1777y_apply_key_update(const struct device *dev, const uint8_t *key_data, size_t key_data_len)
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0x22,
+		.p1 = 0x02,
+		.p2 = 0x01,
+		.data = key_data,
+		.data_len = key_data_len,
+	};
+
+	if (key_data == NULL || key_data_len == 0U || key_data_len > SC1777Y_MAX_DATA_LEN) {
+		return -EINVAL;
+	}
+
+	return sc1777y_command_expect_empty(dev, &cmd);
 }
 
 int sc1777y_get_version_info(const struct device *dev, struct sc1777y_version_info *version)

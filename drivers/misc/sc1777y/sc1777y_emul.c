@@ -329,6 +329,12 @@ static bool sc1777y_emul_prepare_success_payload(const struct sc1777y_emul_data 
 		return true;
 	}
 
+	if (cmd[1] == 0x00U && cmd[2] == 0x82U && cmd[3] == 0x00U && cmd[4] == 0x02U &&
+	    cmd_data_len == 8U) {
+		*payload_len = 0U;
+		return true;
+	}
+
 	if (cmd[1] == 0x80U && cmd[2] == 0xCBU && cmd[3] == 0x00U && cmd[4] == 0x00U) {
 		*payload_len = sc1777y_emul_set_version_payload(payload, payload_size);
 		return true;
@@ -370,6 +376,12 @@ static bool sc1777y_emul_prepare_success_payload(const struct sc1777y_emul_data 
 	    ((cmd_data_len - 8U) % 8U) == 0U) {
 		*payload_len = sc1777y_emul_xor_payload(&cmd[15], cmd_data_len - 8U, payload,
 							payload_size);
+		return true;
+	}
+
+	if (cmd[1] == 0x80U && cmd[2] == 0x22U && cmd[3] == 0x02U && cmd[4] == 0x01U &&
+	    cmd_data_len > 0U && cmd_data_len <= SC1777Y_MAX_DATA_LEN) {
+		*payload_len = 0U;
 		return true;
 	}
 

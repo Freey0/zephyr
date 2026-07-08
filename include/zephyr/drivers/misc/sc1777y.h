@@ -70,6 +70,9 @@ int sc1777y_terminal_encrypt_sensor(const struct device *dev, enum sc1777y_senso
 				    size_t in_len, uint8_t *out, size_t out_size,
 				    size_t *out_len);
 int sc1777y_get_update_identity(const struct device *dev, struct sc1777y_identity *identity);
+int sc1777y_verify_update_auth(const struct device *dev, const uint8_t encrypted8[8]);
+int sc1777y_apply_key_update(const struct device *dev, const uint8_t *key_data,
+			     size_t key_data_len);
 int sc1777y_get_version_info(const struct device *dev, struct sc1777y_version_info *version);
 int sc1777y_get_serial(const struct device *dev, uint8_t serial[SC1777Y_SERIAL_LEN]);
 
