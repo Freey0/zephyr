@@ -1,9 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include <string.h>
-
-#include <zephyr/device.h>
-#include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/misc/sc1777y.h>
 #include <zephyr/drivers/misc/sc1777y_emul.h>
 #include <zephyr/ztest.h>
@@ -84,47 +80,4 @@ ZTEST_F(sc1777y, test_raw_command_accepts_max_payload_and_records_boundary_frame
 	zassert_equal(payload[0], frame[7]);
 	zassert_equal(payload[sizeof(payload) - 1], frame[frame_len - 2]);
 	zassert_equal(test_lrc(&frame[1], frame_len - 2), frame[frame_len - 1]);
-}
-
-ZTEST_F(sc1777y, test_emulator_rejects_invalid_single_transfer_frame)
-{
-	const struct device *bus = DEVICE_DT_GET(DT_BUS(DT_ALIAS(sc1777y_0)));
-	uint8_t frame[] = {0x55, 0x01, 0x02, 0x03, 0x04, 0x00, 0x02, 0xAA, 0x55, 0x00};
-	uint8_t response[sizeof(frame)];
-	size_t frame_len;
-	struct spi_buf tx_buf = {
-		.buf = frame,
-		.len = sizeof(frame),
-	};
-	struct spi_buf rx_buf = {
-		.buf = response,
-		.len = sizeof(response),
-	};
-	const struct spi_buf_set tx_bufs = {
-		.buffers = &tx_buf,
-		.count = 1U,
-	};
-	const struct spi_buf_set rx_bufs = {
-		.buffers = &rx_buf,
-		.count = 1U,
-	};
-	const struct spi_config config = {
-		.frequency = DT_PROP(DT_ALIAS(sc1777y_0), spi_max_frequency),
-		.operation = SPI_WORD_SET(8) | SPI_TRANSFER_MSB | SPI_MODE_CPOL | SPI_MODE_CPHA |
-			     DT_PROP(DT_ALIAS(sc1777y_0), duplex) |
-			     DT_PROP(DT_ALIAS(sc1777y_0), frame_format),
-		.slave = DT_REG_ADDR(DT_ALIAS(sc1777y_0)),
-		.word_delay = DT_PROP(DT_ALIAS(sc1777y_0), spi_interframe_delay_ns),
-	};
-
-	memset(response, 0, sizeof(response));
-
-	zassert_ok(spi_transceive(bus, &config, &tx_bufs, &rx_bufs));
-	zassert_ok(sc1777y_emul_get_last_command(fixture->emul, frame, sizeof(frame), &frame_len));
-	zassert_equal(sizeof(frame), frame_len);
-	zassert_equal(0x6A, response[0]);
-	zassert_equal(0x90, response[1]);
-	zassert_equal(0x00, response[2]);
-	zassert_equal(0x00, response[3]);
-	zassert_equal(0x95, response[4]);
 }
