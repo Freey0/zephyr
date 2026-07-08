@@ -35,9 +35,26 @@
 - 会话协商：会话发起、请求/应答报文 Hash、签名、验签、生成安全认证响应、确认会话。
 - 会话载荷加解密：生成 IV 随机数、加密、解密。
 
-### 私有传输层
+### 公共 API 实现层
 
 新增 `drivers/misc/sc1777y/sc1777y.c`。
+
+该文件实现 `include/zephyr/drivers/misc/sc1777y.h` 暴露的所有公共函数。它是 sample 和应用实际调用的实现入口，不直接暴露 SPI 传输细节。
+
+公共 API 实现层负责：
+
+- 校验 API 参数、枚举值、输入长度和输出缓冲区大小。
+- 将语义接口参数转换为芯片命令的 CLA、INS、P1、P2、长度和 DATA。
+- 调用私有传输层发送命令并接收响应。
+- 将响应 DATA 解析为语义结果结构或调用者输出缓冲区。
+- 将芯片状态字转换为公共 API 返回值，并在需要时填充 `sw1`、`sw2`。
+- 实现 `sc1777y_command()` 低层兜底接口，但仍复用同一套传输、LRC、查询、重发和状态处理。
+
+公共 API 实现层不允许 sample 传入 CLA/INS 来完成第 5 章已封装流程。CLA/INS 只在驱动内部使用，测试通过模拟器捕获字节帧来验证编码是否正确。
+
+### 私有传输层
+
+新增 `drivers/misc/sc1777y/sc1777y_transport.c` 和私有头文件 `drivers/misc/sc1777y/sc1777y_transport.h`。
 
 私有传输层负责：
 
@@ -79,6 +96,8 @@
 
 - `CONFIG_SC1777Y` 依赖 `DT_HAS_*_SC1777Y_ENABLED`，并选择 `SPI`。
 - `CONFIG_EMUL_SC1777Y` 依赖 `SC1777Y` 和 `EMUL`。
+- `CONFIG_SC1777Y` 编译 `sc1777y.c` 和 `sc1777y_transport.c`。
+- `CONFIG_EMUL_SC1777Y` 额外编译 `sc1777y_emul.c`。
 
 从 `drivers/misc/CMakeLists.txt` 注册 `drivers/misc/sc1777y`，并从 `drivers/misc/Kconfig` 引入该驱动的 Kconfig。
 
