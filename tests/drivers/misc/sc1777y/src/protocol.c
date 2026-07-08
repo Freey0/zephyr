@@ -2,6 +2,7 @@
 
 #include <zephyr/drivers/misc/sc1777y.h>
 #include <zephyr/drivers/misc/sc1777y_emul.h>
+#include <zephyr/drivers/spi.h>
 #include <zephyr/ztest.h>
 
 #include "fixture.h"
@@ -144,6 +145,33 @@ ZTEST_F(sc1777y, test_command_retries_after_6a90_status)
 	zassert_equal(2, sc1777y_emul_get_command_count(fixture->emul));
 	zassert_equal(0x90, status.sw1);
 	zassert_equal(0x00, status.sw2);
+}
+
+ZTEST_F(sc1777y, test_raw_command_reports_required_length_on_short_buffer)
+{
+	const struct sc1777y_command cmd = {.cla = 0x00, .ins = 0x84, .p1 = 0x00, .p2 = 0x04};
+	const uint8_t fixed_response[] = {0x11, 0x22, 0x33, 0x44};
+	uint8_t out[3];
+	size_t out_len = 0U;
+
+	zassert_ok(sc1777y_emul_set_fixed_response(fixture->emul, fixed_response,
+						 sizeof(fixed_response)));
+	zassert_equal(-ENOMEM,
+		      sc1777y_command(fixture->dev, &cmd, out, sizeof(out), &out_len, NULL));
+	zassert_equal(sizeof(fixed_response), out_len);
+}
+
+ZTEST_F(sc1777y, test_semantic_api_uses_mode_3_msb_and_8_bit_spi)
+{
+	uint8_t rand4[4];
+	spi_operation_t operation = 0U;
+
+	zassert_ok(sc1777y_get_random(fixture->dev, rand4, sizeof(rand4)));
+	zassert_ok(sc1777y_emul_get_last_operation(fixture->emul, &operation));
+	zassert_true((operation & SPI_MODE_CPOL) != 0U);
+	zassert_true((operation & SPI_MODE_CPHA) != 0U);
+	zassert_equal(8U, SPI_WORD_SIZE_GET(operation));
+	zassert_equal(SPI_TRANSFER_MSB, operation & SPI_TRANSFER_LSB);
 }
 
 ZTEST_F(sc1777y, test_command_returns_access_error_for_auth_failure)

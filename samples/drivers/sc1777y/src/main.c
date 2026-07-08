@@ -124,6 +124,24 @@ int main(void)
 		return fail_check("get_sensor_identity");
 	}
 
+	rc = sc1777y_get_version_info(dev, &version_info);
+	if (rc != 0) {
+		return fail_step("get_version_info", rc);
+	}
+	fill_sequence(version_expected, sizeof(version_expected), 48);
+	if (!expect_equal(version_info.bytes, version_expected, sizeof(version_expected))) {
+		return fail_check("get_version_info");
+	}
+
+	rc = sc1777y_get_serial(dev, serial);
+	if (rc != 0) {
+		return fail_step("get_serial", rc);
+	}
+	if (!expect_equal(serial, expected_serial, sizeof(expected_serial))) {
+		return fail_check("get_serial");
+	}
+	printf("basic info/random PASS\n");
+
 	sensor_rand[0] = 17;
 	sensor_rand[1] = 34;
 	sensor_rand[2] = 51;
@@ -200,6 +218,7 @@ int main(void)
 	    !expect_equal(sensor_challenge, sensor_block, sizeof(sensor_block))) {
 		return fail_check("terminal_decrypt_sensor");
 	}
+	printf("sensor auth/data PASS\n");
 
 	rc = sc1777y_get_update_identity(dev, &update_identity);
 	if (rc != 0) {
@@ -224,23 +243,7 @@ int main(void)
 	if (rc != 0) {
 		return fail_step("apply_key_update", rc);
 	}
-
-	rc = sc1777y_get_version_info(dev, &version_info);
-	if (rc != 0) {
-		return fail_step("get_version_info", rc);
-	}
-	fill_sequence(version_expected, sizeof(version_expected), 48);
-	if (!expect_equal(version_info.bytes, version_expected, sizeof(version_expected))) {
-		return fail_check("get_version_info");
-	}
-
-	rc = sc1777y_get_serial(dev, serial);
-	if (rc != 0) {
-		return fail_step("get_serial", rc);
-	}
-	if (!expect_equal(serial, expected_serial, sizeof(expected_serial))) {
-		return fail_check("get_serial");
-	}
+	printf("key update PASS\n");
 
 	fill_sequence(platform_key, sizeof(platform_key), 16);
 	rc = sc1777y_import_platform_public_key(dev, platform_key);
@@ -272,6 +275,7 @@ int main(void)
 	if (platform_type != SC1777Y_PLATFORM_NANRUI) {
 		return fail_check("get_platform_type");
 	}
+	printf("platform setup PASS\n");
 
 	rc = sc1777y_generate_sm2_keypair(dev);
 	if (rc != 0) {
@@ -344,6 +348,7 @@ int main(void)
 	if (!expect_equal(dkhash, dkhash_expected, sizeof(dkhash_expected))) {
 		return fail_check("session_confirm");
 	}
+	printf("certificate/session negotiation PASS\n");
 
 	session_block[0] = 1;
 	session_block[1] = 17;
@@ -382,6 +387,7 @@ int main(void)
 	    !expect_equal(session_expected, session_block, sizeof(session_block))) {
 		return fail_check("session_decrypt");
 	}
+	printf("session crypto PASS\n");
 
 	printf("SC1777Y sample PASS\n");
 	return 0;

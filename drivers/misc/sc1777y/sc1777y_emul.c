@@ -20,13 +20,17 @@ struct sc1777y_emul_data {
 	uint32_t ready_delay;
 	uint32_t ready_polls_remaining;
 	uint8_t platform_type;
+	spi_operation_t last_operation;
 	uint8_t last_command[SC1777Y_MAX_FRAME_LEN];
 	size_t last_command_len;
 	uint8_t response[SC1777Y_MAX_FRAME_LEN];
 	size_t response_len;
 	size_t response_offset;
+	uint8_t fixed_response[SC1777Y_MAX_DATA_LEN];
+	size_t fixed_response_len;
 	bool response_ready;
 	bool corrupt_next_response_lrc;
+	bool fixed_response_valid;
 	bool next_status_valid;
 	uint8_t next_status_sw1;
 	uint8_t next_status_sw2;
@@ -124,7 +128,7 @@ void sc1777y_emul_set_next_status(const struct emul *target, uint8_t sw1, uint8_
 }
 
 void sc1777y_emul_set_status_repeat(const struct emul *target, uint8_t sw1, uint8_t sw2,
-				      uint32_t repeat_count)
+				    uint32_t repeat_count)
 {
 	struct sc1777y_emul_data *data = target->data;
 
@@ -132,6 +136,42 @@ void sc1777y_emul_set_status_repeat(const struct emul *target, uint8_t sw1, uint
 	data->next_status_sw2 = sw2;
 	data->next_status_valid = repeat_count > 0U;
 	data->next_status_repeat_count = repeat_count;
+}
+
+int sc1777y_emul_set_fixed_response(const struct emul *target, const uint8_t *data, size_t len)
+{
+	struct sc1777y_emul_data *emul_data;
+
+	if (target == NULL || (len > 0U && data == NULL)) {
+		return -EINVAL;
+	}
+
+	if (len > SC1777Y_MAX_DATA_LEN) {
+		return -EMSGSIZE;
+	}
+
+	emul_data = target->data;
+	if (len > 0U) {
+		memcpy(emul_data->fixed_response, data, len);
+	}
+	emul_data->fixed_response_len = len;
+	emul_data->fixed_response_valid = true;
+
+	return 0;
+}
+
+int sc1777y_emul_get_last_operation(const struct emul *target, spi_operation_t *operation)
+{
+	struct sc1777y_emul_data *data;
+
+	if (target == NULL || operation == NULL) {
+		return -EINVAL;
+	}
+
+	data = target->data;
+	*operation = data->last_operation;
+
+	return 0;
 }
 
 static size_t sc1777y_emul_copy_tx_bytes(struct sc1777y_emul_data *data,
@@ -372,6 +412,28 @@ static size_t sc1777y_emul_xor_payload_with_mask(const uint8_t *input, size_t in
 	return input_len;
 }
 
+static void sc1777y_emul_apply_fixed_response(struct sc1777y_emul_data *data, uint8_t *payload,
+					      size_t payload_size, size_t *payload_len)
+{
+	if (!data->fixed_response_valid || payload_len == NULL) {
+		return;
+	}
+
+	if (data->fixed_response_len > payload_size) {
+		data->fixed_response_len = 0U;
+		data->fixed_response_valid = false;
+		return;
+	}
+
+	if (data->fixed_response_len > 0U) {
+		memcpy(payload, data->fixed_response, data->fixed_response_len);
+	}
+
+	*payload_len = data->fixed_response_len;
+	data->fixed_response_len = 0U;
+	data->fixed_response_valid = false;
+}
+
 static bool sc1777y_emul_prepare_success_payload(struct sc1777y_emul_data *data, uint8_t *payload,
 						 size_t payload_size, size_t *payload_len)
 {
@@ -389,8 +451,8 @@ static bool sc1777y_emul_prepare_success_payload(struct sc1777y_emul_data *data,
 		return true;
 	}
 
-	if (cmd[1] == 0x80U && cmd[2] == 0xCBU && cmd[4] == 0x00U &&
-	    (cmd[3] == 0x80U || cmd[3] == 0x81U)) {
+	if (cmd[1] == 0x00U && cmd[2] == 0x36U && cmd[3] == 0x00U && cmd[4] == 0x00U &&
+	    cmd_data_len == 0U) {
 		*payload_len = sc1777y_emul_set_identity_payload(payload, payload_size);
 		return true;
 	}
@@ -407,7 +469,8 @@ static bool sc1777y_emul_prepare_success_payload(struct sc1777y_emul_data *data,
 		return true;
 	}
 
-	if (cmd[1] == 0x80U && cmd[2] == 0xCBU && cmd[3] == 0x00U && cmd[4] == 0x00U) {
+	if (cmd[1] == 0x00U && cmd[2] == 0x5BU && cmd[3] == 0x00U && cmd[4] == 0x40U &&
+	    cmd_data_len == 0U) {
 		*payload_len = sc1777y_emul_set_version_payload(payload, payload_size);
 		return true;
 	}
@@ -571,6 +634,9 @@ static void sc1777y_emul_prepare_response(struct sc1777y_emul_data *data)
 		} else if (sc1777y_emul_prepare_success_payload(data, &data->response[4],
 							       sizeof(data->response) - 5U,
 							       &payload_len)) {
+			sc1777y_emul_apply_fixed_response(data, &data->response[4],
+							 sizeof(data->response) - 5U,
+							 &payload_len);
 			sw1 = 0x90U;
 			sw2 = 0x00U;
 		} else {
@@ -603,7 +669,9 @@ static int sc1777y_emul_io(const struct emul *target, const struct spi_config *c
 	struct sc1777y_emul_data *data = target->data;
 	size_t tx_len;
 
-	ARG_UNUSED(config);
+	if (config != NULL) {
+		data->last_operation = config->operation;
+	}
 
 	tx_len = sc1777y_emul_copy_tx_bytes(data, tx_bufs);
 	if (tx_len > 0U) {

@@ -6,6 +6,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <zephyr/drivers/spi.h>
+
 struct emul;
 
 #ifdef __cplusplus
@@ -22,7 +24,9 @@ void sc1777y_emul_set_ready_delay(const struct emul *target, uint32_t polls_befo
 void sc1777y_emul_corrupt_next_response_lrc(const struct emul *target);
 void sc1777y_emul_set_next_status(const struct emul *target, uint8_t sw1, uint8_t sw2);
 void sc1777y_emul_set_status_repeat(const struct emul *target, uint8_t sw1, uint8_t sw2,
-				      uint32_t repeat_count);
+				    uint32_t repeat_count);
+int sc1777y_emul_set_fixed_response(const struct emul *target, const uint8_t *data, size_t len);
+int sc1777y_emul_get_last_operation(const struct emul *target, spi_operation_t *operation);
 
 #ifdef __cplusplus
 }

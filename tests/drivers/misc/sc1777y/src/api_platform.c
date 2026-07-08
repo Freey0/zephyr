@@ -135,6 +135,17 @@ ZTEST_F(sc1777y, test_get_platform_type_sends_803e01000000)
 	zassert_equal(sizeof(expected_frame), frame_len);
 }
 
+ZTEST_F(sc1777y, test_get_platform_type_accepts_unset_value)
+{
+	const uint8_t injected_type = SC1777Y_PLATFORM_UNSET;
+	enum sc1777y_platform_type type = SC1777Y_PLATFORM_NANRUI;
+
+	zassert_ok(sc1777y_emul_set_fixed_response(fixture->emul, &injected_type,
+						 sizeof(injected_type)));
+	zassert_ok(sc1777y_get_platform_type(fixture->dev, &type));
+	zassert_equal(SC1777Y_PLATFORM_UNSET, type);
+}
+
 ZTEST_F(sc1777y, test_generate_sm2_keypair_sends_802c00000000)
 {
 	const uint8_t expected_frame[] = {0x55, 0x80, 0x2C, 0x00, 0x00, 0x00, 0x00, 0x53};

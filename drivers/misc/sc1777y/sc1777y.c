@@ -471,6 +471,7 @@ int sc1777y_command(const struct device *dev, const struct sc1777y_command *cmd,
 		if (ret == 0) {
 			payload_len = response_len - SC1777Y_RESPONSE_HEADER_LEN - 1U;
 			if (payload_len > out_size) {
+				*out_len = payload_len;
 				return -ENOMEM;
 			}
 			if (payload_len > 0U) {
@@ -520,9 +521,9 @@ int sc1777y_get_random(const struct device *dev, uint8_t *out, size_t len)
 int sc1777y_get_sensor_identity(const struct device *dev, struct sc1777y_identity *identity)
 {
 	const struct sc1777y_command cmd = {
-		.cla = 0x80,
-		.ins = 0xCB,
-		.p1 = 0x80,
+		.cla = 0x00,
+		.ins = 0x36,
+		.p1 = 0x00,
 		.p2 = 0x00,
 	};
 
@@ -674,10 +675,10 @@ int sc1777y_apply_key_update(const struct device *dev, const uint8_t *key_data, 
 int sc1777y_get_version_info(const struct device *dev, struct sc1777y_version_info *version)
 {
 	const struct sc1777y_command cmd = {
-		.cla = 0x80,
-		.ins = 0xCB,
+		.cla = 0x00,
+		.ins = 0x5B,
 		.p1 = 0x00,
-		.p2 = 0x00,
+		.p2 = 0x40,
 	};
 
 	if (version == NULL) {
@@ -797,7 +798,8 @@ int sc1777y_get_platform_type(const struct device *dev, enum sc1777y_platform_ty
 		return ret;
 	}
 
-	if (raw_type != SC1777Y_PLATFORM_NANRUI && raw_type != SC1777Y_PLATFORM_WANGAN) {
+	if (raw_type != SC1777Y_PLATFORM_UNSET && raw_type != SC1777Y_PLATFORM_NANRUI &&
+	    raw_type != SC1777Y_PLATFORM_WANGAN) {
 		return -EIO;
 	}
 

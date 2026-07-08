@@ -29,12 +29,12 @@ ZTEST_F(sc1777y, test_get_random_rejects_invalid_lengths)
 	zassert_equal(-EINVAL, sc1777y_get_random(fixture->dev, rand4, 0));
 }
 
-ZTEST_F(sc1777y, test_get_sensor_identity_sends_80cb80000000)
+ZTEST_F(sc1777y, test_get_sensor_identity_sends_003600000000)
 {
 	struct sc1777y_identity identity;
 	uint8_t frame[16];
 	size_t frame_len;
-	const uint8_t expected_frame[] = {0x55, 0x80, 0xCB, 0x80, 0x00, 0x00, 0x00, 0x34};
+	const uint8_t expected_frame[] = {0x55, 0x00, 0x36, 0x00, 0x00, 0x00, 0x00, 0xC9};
 	const uint8_t expected_serial[] = {0x53, 0x43, 0x17, 0x77, 0x00, 0x00, 0x00, 0x01};
 	const uint8_t expected_key_version[] = {0x01, 0x02, 0x03, 0x00};
 
@@ -77,13 +77,13 @@ ZTEST_F(sc1777y, test_get_update_identity_rejects_null_output)
 	zassert_equal(0, sc1777y_emul_get_command_count(fixture->emul));
 }
 
-ZTEST_F(sc1777y, test_get_version_info_sends_80cb00000000)
+ZTEST_F(sc1777y, test_get_version_info_sends_005b00400000)
 {
 	struct sc1777y_version_info version;
 	uint8_t frame[16];
 	size_t frame_len;
 	uint8_t expected_version[sizeof(version.bytes)];
-	const uint8_t expected_frame[] = {0x55, 0x80, 0xCB, 0x00, 0x00, 0x00, 0x00, 0xB4};
+	const uint8_t expected_frame[] = {0x55, 0x00, 0x5B, 0x00, 0x40, 0x00, 0x00, 0xE4};
 
 	for (size_t i = 0; i < sizeof(expected_version); i++) {
 		expected_version[i] = 0x30 + i;
