@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define SC1777Y_MAX_DATA_LEN 255U
+#define SC1777Y_MAX_DATA_LEN 2048U
 #define SC1777Y_MAX_FRAME_LEN (SC1777Y_MAX_DATA_LEN + 8U)
 
 struct sc1777y_command {

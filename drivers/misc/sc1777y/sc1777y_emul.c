@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <stdbool.h>
 #include <errno.h>
 #define DT_DRV_COMPAT senscomm_sc1777y
 
@@ -17,6 +18,17 @@ struct sc1777y_emul_data {
 	uint8_t last_command[SC1777Y_MAX_FRAME_LEN];
 	size_t last_command_len;
 };
+
+static uint8_t sc1777y_emul_lrc(const uint8_t *buf, size_t len)
+{
+	uint8_t x = 0U;
+
+	for (size_t i = 0; i < len; i++) {
+		x ^= buf[i];
+	}
+
+	return (uint8_t)~x;
+}
 
 void sc1777y_emul_reset(const struct emul *target)
 {
@@ -106,17 +118,45 @@ static void sc1777y_emul_fill_rx_bytes(const struct spi_buf_set *rx_bufs, const 
 	}
 }
 
+static bool sc1777y_emul_is_valid_command(const struct sc1777y_emul_data *data)
+{
+	uint16_t encoded_data_len;
+	uint8_t lrc;
+
+	if (data->last_command_len < 8U) {
+		return false;
+	}
+
+	if (data->last_command[0] != 0x55U) {
+		return false;
+	}
+
+	encoded_data_len = ((uint16_t)data->last_command[5] << 8) | data->last_command[6];
+	if ((size_t)encoded_data_len + 8U != data->last_command_len) {
+		return false;
+	}
+
+	lrc = sc1777y_emul_lrc(&data->last_command[1], data->last_command_len - 2U);
+
+	return data->last_command[data->last_command_len - 1U] == lrc;
+}
+
 static int sc1777y_emul_io(const struct emul *target, const struct spi_config *config,
 			   const struct spi_buf_set *tx_bufs, const struct spi_buf_set *rx_bufs)
 {
-	static const uint8_t response[] = {0x90, 0x00, 0x00, 0x00, 0x6F};
+	static const uint8_t valid_response[] = {0x90, 0x00, 0x00, 0x00, 0x6F};
+	static const uint8_t invalid_response[] = {0x6A, 0x90, 0x00, 0x00, 0x95};
 	struct sc1777y_emul_data *data = target->data;
 
 	ARG_UNUSED(config);
 
 	data->last_command_len = sc1777y_emul_copy_tx_bytes(data, tx_bufs);
 	data->command_count++;
-	sc1777y_emul_fill_rx_bytes(rx_bufs, response, sizeof(response));
+	if (sc1777y_emul_is_valid_command(data)) {
+		sc1777y_emul_fill_rx_bytes(rx_bufs, valid_response, sizeof(valid_response));
+	} else {
+		sc1777y_emul_fill_rx_bytes(rx_bufs, invalid_response, sizeof(invalid_response));
+	}
 
 	return 0;
 }
