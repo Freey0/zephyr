@@ -20,6 +20,11 @@ struct sc1777y_config {
 #define SC1777Y_POLL_INTERVAL_US 20
 #define SC1777Y_POLL_TIMEOUT_US 2000000
 #define SC1777Y_RESPONSE_HEADER_LEN 4U
+#define SC1777Y_SENSOR_AUTH_CHALLENGE_LEN 4U
+#define SC1777Y_SENSOR_AUTH_ENCRYPTED_LEN 8U
+#define SC1777Y_SENSOR_AUTH_RAND_LEN 4U
+#define SC1777Y_SENSOR_BLOCK_LEN 8U
+#define SC1777Y_SENSOR_ID_LEN 8U
 
 static int sc1777y_command_expect_len(const struct device *dev, const struct sc1777y_command *cmd,
 				      uint8_t *out, size_t len)
@@ -33,6 +38,139 @@ static int sc1777y_command_expect_len(const struct device *dev, const struct sc1
 	}
 
 	return out_len == len ? 0 : -EIO;
+}
+
+static int sc1777y_sensor_auth_p2(enum sc1777y_sensor_type type, uint8_t *p2)
+{
+	if (p2 == NULL) {
+		return -EINVAL;
+	}
+
+	if (type == SC1777Y_SENSOR_LEGACY) {
+		*p2 = 0x01;
+		return 0;
+	}
+
+	if (type == SC1777Y_SENSOR_NEW) {
+		*p2 = 0x04;
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
+static int sc1777y_sensor_data_p2(enum sc1777y_sensor_type type, uint8_t *p2)
+{
+	if (p2 == NULL) {
+		return -EINVAL;
+	}
+
+	if (type == SC1777Y_SENSOR_LEGACY) {
+		*p2 = 0x02;
+		return 0;
+	}
+
+	if (type == SC1777Y_SENSOR_NEW) {
+		*p2 = 0x05;
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
+static int sc1777y_validate_sensor_blocks(const uint8_t *in, size_t in_len, size_t max_len)
+{
+	if (in == NULL || in_len == 0U || in_len > max_len || (in_len % SC1777Y_SENSOR_BLOCK_LEN) != 0U) {
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int sc1777y_sensor_crypto(const struct device *dev, uint8_t ins, uint8_t p1, uint8_t p2,
+				 const uint8_t *in, size_t in_len, uint8_t *out, size_t out_size,
+				 size_t *out_len)
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = ins,
+		.p1 = p1,
+		.p2 = p2,
+		.data = in,
+		.data_len = in_len,
+	};
+	size_t actual_out_len;
+	int ret;
+
+	ret = sc1777y_validate_sensor_blocks(in, in_len, SC1777Y_MAX_DATA_LEN);
+	if (ret != 0) {
+		return ret;
+	}
+
+	ret = sc1777y_command(dev, &cmd, out, out_size, &actual_out_len, NULL);
+	if (ret != 0) {
+		return ret;
+	}
+
+	if (actual_out_len != in_len) {
+		return -EIO;
+	}
+
+	*out_len = actual_out_len;
+
+	return 0;
+}
+
+static int sc1777y_terminal_sensor_crypto(const struct device *dev, uint8_t ins,
+					  enum sc1777y_sensor_type type,
+					  const uint8_t sensor_id[SC1777Y_SENSOR_ID_LEN],
+					  const uint8_t *in, size_t in_len, uint8_t *out,
+					  size_t out_size, size_t *out_len)
+{
+	uint8_t p2;
+	uint8_t payload[SC1777Y_MAX_DATA_LEN];
+	struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = ins,
+		.p1 = 0x81,
+	};
+	size_t actual_out_len;
+	int ret;
+
+	if (sensor_id == NULL) {
+		return -EINVAL;
+	}
+
+	ret = sc1777y_sensor_data_p2(type, &p2);
+	if (ret != 0) {
+		return ret;
+	}
+
+	ret = sc1777y_validate_sensor_blocks(in, in_len,
+					     SC1777Y_MAX_DATA_LEN - SC1777Y_SENSOR_ID_LEN);
+	if (ret != 0) {
+		return ret;
+	}
+
+	memcpy(payload, sensor_id, SC1777Y_SENSOR_ID_LEN);
+	memcpy(&payload[SC1777Y_SENSOR_ID_LEN], in, in_len);
+
+	cmd.p2 = p2;
+	cmd.data = payload;
+	cmd.data_len = SC1777Y_SENSOR_ID_LEN + in_len;
+
+	ret = sc1777y_command(dev, &cmd, out, out_size, &actual_out_len, NULL);
+	if (ret != 0) {
+		return ret;
+	}
+
+	if (actual_out_len != in_len) {
+		return -EIO;
+	}
+
+	*out_len = actual_out_len;
+
+	return 0;
 }
 
 static uint8_t sc1777y_lrc(const uint8_t *buf, size_t len)
@@ -307,6 +445,92 @@ int sc1777y_get_sensor_identity(const struct device *dev, struct sc1777y_identit
 	}
 
 	return sc1777y_command_expect_len(dev, &cmd, (uint8_t *)identity, sizeof(*identity));
+}
+
+int sc1777y_encrypt_sensor_challenge(const struct device *dev, const uint8_t rand4[4],
+				     uint8_t encrypted8[8])
+{
+	uint8_t payload[SC1777Y_SENSOR_AUTH_ENCRYPTED_LEN] = {0x00, 0x04};
+	const struct sc1777y_command cmd = {
+		.cla = 0x00,
+		.ins = 0x88,
+		.p1 = 0x00,
+		.p2 = 0x01,
+		.data = payload,
+		.data_len = sizeof(payload),
+	};
+
+	if (rand4 == NULL || encrypted8 == NULL) {
+		return -EINVAL;
+	}
+
+	memcpy(&payload[2], rand4, SC1777Y_SENSOR_AUTH_CHALLENGE_LEN);
+	payload[6] = 0x80;
+	payload[7] = 0x00;
+
+	return sc1777y_command_expect_len(dev, &cmd, encrypted8, SC1777Y_SENSOR_AUTH_ENCRYPTED_LEN);
+}
+
+int sc1777y_verify_sensor_auth(const struct device *dev, enum sc1777y_sensor_type type,
+			       const uint8_t sensor_id[8], const uint8_t encrypted8[8],
+			       uint8_t rand4[4])
+{
+	uint8_t p2;
+	uint8_t payload[SC1777Y_SENSOR_ID_LEN + SC1777Y_SENSOR_AUTH_ENCRYPTED_LEN];
+	struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0x08,
+		.p1 = 0x01,
+	};
+	int ret;
+
+	if (sensor_id == NULL || encrypted8 == NULL || rand4 == NULL) {
+		return -EINVAL;
+	}
+
+	ret = sc1777y_sensor_auth_p2(type, &p2);
+	if (ret != 0) {
+		return ret;
+	}
+
+	memcpy(payload, sensor_id, SC1777Y_SENSOR_ID_LEN);
+	memcpy(&payload[SC1777Y_SENSOR_ID_LEN], encrypted8, SC1777Y_SENSOR_AUTH_ENCRYPTED_LEN);
+	cmd.p2 = p2;
+	cmd.data = payload;
+	cmd.data_len = sizeof(payload);
+
+	return sc1777y_command_expect_len(dev, &cmd, rand4, SC1777Y_SENSOR_AUTH_RAND_LEN);
+}
+
+int sc1777y_sensor_encrypt(const struct device *dev, const uint8_t *in, size_t in_len,
+			   uint8_t *out, size_t out_size, size_t *out_len)
+{
+	return sc1777y_sensor_crypto(dev, 0x06, 0x80, 0x01, in, in_len, out, out_size, out_len);
+}
+
+int sc1777y_sensor_decrypt_from_terminal(const struct device *dev, const uint8_t *in,
+					 size_t in_len, uint8_t *out, size_t out_size,
+					 size_t *out_len)
+{
+	return sc1777y_sensor_crypto(dev, 0x08, 0x80, 0x01, in, in_len, out, out_size, out_len);
+}
+
+int sc1777y_terminal_decrypt_sensor(const struct device *dev, enum sc1777y_sensor_type type,
+				    const uint8_t sensor_id[8], const uint8_t *in,
+				    size_t in_len, uint8_t *out, size_t out_size,
+				    size_t *out_len)
+{
+	return sc1777y_terminal_sensor_crypto(dev, 0x08, type, sensor_id, in, in_len, out, out_size,
+					       out_len);
+}
+
+int sc1777y_terminal_encrypt_sensor(const struct device *dev, enum sc1777y_sensor_type type,
+				    const uint8_t sensor_id[8], const uint8_t *in,
+				    size_t in_len, uint8_t *out, size_t out_size,
+				    size_t *out_len)
+{
+	return sc1777y_terminal_sensor_crypto(dev, 0x06, type, sensor_id, in, in_len, out, out_size,
+					       out_len);
 }
 
 int sc1777y_get_update_identity(const struct device *dev, struct sc1777y_identity *identity)

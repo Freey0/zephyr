@@ -5,4 +5,5 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(sc1777y)
 
 target_include_directories(app PRIVATE include)
-target_sources(app PRIVATE src/fixture.c src/protocol.c src/api_errors.c src/api_basic.c)
+target_sources(app PRIVATE src/fixture.c src/protocol.c src/api_errors.c src/api_basic.c
+			   src/api_sensor.c)

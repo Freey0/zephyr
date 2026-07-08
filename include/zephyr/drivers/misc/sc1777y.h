@@ -33,6 +33,11 @@ struct sc1777y_status {
 	uint8_t sw2;
 };
 
+enum sc1777y_sensor_type {
+	SC1777Y_SENSOR_LEGACY = 0,
+	SC1777Y_SENSOR_NEW = 1,
+};
+
 struct sc1777y_identity {
 	uint8_t serial[SC1777Y_SERIAL_LEN];
 	uint8_t key_version[SC1777Y_KEY_VERSION_LEN];
@@ -46,6 +51,24 @@ int sc1777y_command(const struct device *dev, const struct sc1777y_command *cmd,
 		    size_t out_size, size_t *out_len, struct sc1777y_status *status);
 int sc1777y_get_random(const struct device *dev, uint8_t *out, size_t len);
 int sc1777y_get_sensor_identity(const struct device *dev, struct sc1777y_identity *identity);
+int sc1777y_encrypt_sensor_challenge(const struct device *dev, const uint8_t rand4[4],
+				     uint8_t encrypted8[8]);
+int sc1777y_verify_sensor_auth(const struct device *dev, enum sc1777y_sensor_type type,
+			       const uint8_t sensor_id[8], const uint8_t encrypted8[8],
+			       uint8_t rand4[4]);
+int sc1777y_sensor_encrypt(const struct device *dev, const uint8_t *in, size_t in_len,
+			   uint8_t *out, size_t out_size, size_t *out_len);
+int sc1777y_sensor_decrypt_from_terminal(const struct device *dev, const uint8_t *in,
+					 size_t in_len, uint8_t *out, size_t out_size,
+					 size_t *out_len);
+int sc1777y_terminal_decrypt_sensor(const struct device *dev, enum sc1777y_sensor_type type,
+				    const uint8_t sensor_id[8], const uint8_t *in,
+				    size_t in_len, uint8_t *out, size_t out_size,
+				    size_t *out_len);
+int sc1777y_terminal_encrypt_sensor(const struct device *dev, enum sc1777y_sensor_type type,
+				    const uint8_t sensor_id[8], const uint8_t *in,
+				    size_t in_len, uint8_t *out, size_t out_size,
+				    size_t *out_len);
 int sc1777y_get_update_identity(const struct device *dev, struct sc1777y_identity *identity);
 int sc1777y_get_version_info(const struct device *dev, struct sc1777y_version_info *version);
 int sc1777y_get_serial(const struct device *dev, uint8_t serial[SC1777Y_SERIAL_LEN]);

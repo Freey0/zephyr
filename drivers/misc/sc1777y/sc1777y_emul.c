@@ -266,6 +266,46 @@ static size_t sc1777y_emul_set_serial_payload(uint8_t *payload, size_t payload_s
 	return sizeof(serial);
 }
 
+static size_t sc1777y_emul_set_sensor_challenge_payload(uint8_t *payload, size_t payload_size)
+{
+	static const uint8_t encrypted[] = {0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7};
+
+	if (payload_size < sizeof(encrypted)) {
+		return 0U;
+	}
+
+	memcpy(payload, encrypted, sizeof(encrypted));
+
+	return sizeof(encrypted);
+}
+
+static size_t sc1777y_emul_set_sensor_auth_payload(uint8_t *payload, size_t payload_size)
+{
+	static const uint8_t rand4[] = {0xD0, 0xD1, 0xD2, 0xD3};
+
+	if (payload_size < sizeof(rand4)) {
+		return 0U;
+	}
+
+	memcpy(payload, rand4, sizeof(rand4));
+
+	return sizeof(rand4);
+}
+
+static size_t sc1777y_emul_xor_payload(const uint8_t *input, size_t input_len, uint8_t *payload,
+				       size_t payload_size)
+{
+	if (input_len > payload_size) {
+		return 0U;
+	}
+
+	for (size_t i = 0; i < input_len; i++) {
+		payload[i] = input[i] ^ 0x5AU;
+	}
+
+	return input_len;
+}
+
 static bool sc1777y_emul_prepare_success_payload(const struct sc1777y_emul_data *data, uint8_t *payload,
 						 size_t payload_size, size_t *payload_len)
 {
@@ -297,6 +337,39 @@ static bool sc1777y_emul_prepare_success_payload(const struct sc1777y_emul_data 
 	if (cmd[1] == 0x00U && cmd[2] == 0xB0U && cmd[3] == 0x99U && cmd[4] == 0x00U &&
 	    cmd_data_len == 2U && cmd[7] == 0x00U && cmd[8] == SC1777Y_SERIAL_LEN) {
 		*payload_len = sc1777y_emul_set_serial_payload(payload, payload_size);
+		return true;
+	}
+
+	if (cmd[1] == 0x00U && cmd[2] == 0x88U && cmd[3] == 0x00U && cmd[4] == 0x01U &&
+	    cmd_data_len == 8U && cmd[7] == 0x00U && cmd[8] == 0x04U && cmd[13] == 0x80U &&
+	    cmd[14] == 0x00U) {
+		*payload_len = sc1777y_emul_set_sensor_challenge_payload(payload, payload_size);
+		return true;
+	}
+
+	if (cmd[1] == 0x80U && cmd[2] == 0x08U && cmd[3] == 0x01U &&
+	    (cmd[4] == 0x01U || cmd[4] == 0x04U) && cmd_data_len == 16U) {
+		*payload_len = sc1777y_emul_set_sensor_auth_payload(payload, payload_size);
+		return true;
+	}
+
+	if (cmd[1] == 0x80U && cmd[2] == 0x06U && cmd[3] == 0x80U && cmd[4] == 0x01U &&
+	    cmd_data_len > 0U && (cmd_data_len % 8U) == 0U) {
+		*payload_len = sc1777y_emul_xor_payload(&cmd[7], cmd_data_len, payload, payload_size);
+		return true;
+	}
+
+	if (cmd[1] == 0x80U && cmd[2] == 0x08U && cmd[3] == 0x80U && cmd[4] == 0x01U &&
+	    cmd_data_len > 0U && (cmd_data_len % 8U) == 0U) {
+		*payload_len = sc1777y_emul_xor_payload(&cmd[7], cmd_data_len, payload, payload_size);
+		return true;
+	}
+
+	if (cmd[1] == 0x80U && (cmd[2] == 0x06U || cmd[2] == 0x08U) && cmd[3] == 0x81U &&
+	    (cmd[4] == 0x02U || cmd[4] == 0x05U) && cmd_data_len >= 16U &&
+	    ((cmd_data_len - 8U) % 8U) == 0U) {
+		*payload_len = sc1777y_emul_xor_payload(&cmd[15], cmd_data_len - 8U, payload,
+							payload_size);
 		return true;
 	}
 
