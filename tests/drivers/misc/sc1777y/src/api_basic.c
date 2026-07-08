@@ -53,12 +53,12 @@ ZTEST_F(sc1777y, test_get_sensor_identity_rejects_null_output)
 	zassert_equal(0, sc1777y_emul_get_command_count(fixture->emul));
 }
 
-ZTEST_F(sc1777y, test_get_update_identity_sends_80cb81000000)
+ZTEST_F(sc1777y, test_get_update_identity_sends_001000000000)
 {
 	struct sc1777y_identity identity;
 	uint8_t frame[16];
 	size_t frame_len;
-	const uint8_t expected_frame[] = {0x55, 0x80, 0xCB, 0x81, 0x00, 0x00, 0x00, 0x35};
+	const uint8_t expected_frame[] = {0x55, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0xEF};
 	const uint8_t expected_serial[] = {0x53, 0x43, 0x17, 0x77, 0x00, 0x00, 0x00, 0x01};
 	const uint8_t expected_key_version[] = {0x01, 0x02, 0x03, 0x00};
 

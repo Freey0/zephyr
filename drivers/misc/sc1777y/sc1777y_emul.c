@@ -329,6 +329,12 @@ static bool sc1777y_emul_prepare_success_payload(const struct sc1777y_emul_data 
 		return true;
 	}
 
+	if (cmd[1] == 0x00U && cmd[2] == 0x10U && cmd[3] == 0x00U && cmd[4] == 0x00U &&
+	    cmd_data_len == 0U) {
+		*payload_len = sc1777y_emul_set_identity_payload(payload, payload_size);
+		return true;
+	}
+
 	if (cmd[1] == 0x00U && cmd[2] == 0x82U && cmd[3] == 0x00U && cmd[4] == 0x02U &&
 	    cmd_data_len == 8U) {
 		*payload_len = 0U;

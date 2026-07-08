@@ -568,9 +568,9 @@ int sc1777y_terminal_encrypt_sensor(const struct device *dev, enum sc1777y_senso
 int sc1777y_get_update_identity(const struct device *dev, struct sc1777y_identity *identity)
 {
 	const struct sc1777y_command cmd = {
-		.cla = 0x80,
-		.ins = 0xCB,
-		.p1 = 0x81,
+		.cla = 0x00,
+		.ins = 0x10,
+		.p1 = 0x00,
 		.p2 = 0x00,
 	};
 
