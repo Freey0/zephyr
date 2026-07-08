@@ -96,7 +96,13 @@ sample 不允许传入 CLA/INS 来完成第 5 章已封装流程。CLA/INS 只�
 
 新增 `tests/drivers/misc/sc1777y`。
 
-测试先于实现编写，并在 native_sim 上运行。测试覆盖：
+测试先于实现编写，并在 native_sim 上运行。测试 overlay 必须在 `spi0` 下挂载 SC1777Y 模拟芯片，测试代码通过 `DEVICE_DT_GET()` 获取真实驱动设备，通过 `EMUL_DT_GET()` 获取对应模拟器。
+
+驱动测试的主路径是：调用 `sc1777y.h` 公共 API，让驱动通过 SPI emulator 访问 SC1777Y 模拟芯片，然后断言模拟器记录到的字节级命令帧正确。测试不直接调用 `sc1777y.c` 内部 static helper。
+
+模拟器需要提供测试用访问接口，用于读取最后一次命令帧、命令次数、最近状态字、注入延迟 ready、注入响应 LRC 错误、注入固定状态字和固定响应载荷。
+
+测试覆盖：
 
 - LRC 计算和命令组帧。
 - SPI mode 和设备 ready 检查。
@@ -107,7 +113,7 @@ sample 不允许传入 CLA/INS 来完成第 5 章已封装流程。CLA/INS 只�
 - 每个公共语义 API 都发出预期芯片命令，并能解析模拟器确定性响应。
 - 面向应用的 API 会拒绝 NULL 指针、过小缓冲区、非法载荷长度和不支持的枚举值。
 
-测试包含字节级模拟器断言。这样即使语义 API 仍返回成功，CLA/INS/P1/P2/长度编码的回归也会被捕获。
+每个语义 API 测试至少断言一次模拟器中的字节级数据，包括命令头、CLA、INS、P1、P2、Len1、Len2、DATA 和 LRC。这样即使 API 返回值仍然成功，CLA/INS/P1/P2/长度或 LRC 编码的回归也会被捕获。
 
 ### Sample
 
