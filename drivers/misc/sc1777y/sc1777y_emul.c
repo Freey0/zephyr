@@ -30,6 +30,7 @@ struct sc1777y_emul_data {
 	bool next_status_valid;
 	uint8_t next_status_sw1;
 	uint8_t next_status_sw2;
+	uint32_t next_status_repeat_count;
 };
 
 static uint8_t sc1777y_emul_lrc(const uint8_t *buf, size_t len)
@@ -119,6 +120,18 @@ void sc1777y_emul_set_next_status(const struct emul *target, uint8_t sw1, uint8_
 	data->next_status_sw1 = sw1;
 	data->next_status_sw2 = sw2;
 	data->next_status_valid = true;
+	data->next_status_repeat_count = 1U;
+}
+
+void sc1777y_emul_set_status_repeat(const struct emul *target, uint8_t sw1, uint8_t sw2,
+				      uint32_t repeat_count)
+{
+	struct sc1777y_emul_data *data = target->data;
+
+	data->next_status_sw1 = sw1;
+	data->next_status_sw2 = sw2;
+	data->next_status_valid = repeat_count > 0U;
+	data->next_status_repeat_count = repeat_count;
 }
 
 static size_t sc1777y_emul_copy_tx_bytes(struct sc1777y_emul_data *data,
@@ -545,7 +558,12 @@ static void sc1777y_emul_prepare_response(struct sc1777y_emul_data *data)
 	if (data->next_status_valid) {
 		sw1 = data->next_status_sw1;
 		sw2 = data->next_status_sw2;
-		data->next_status_valid = false;
+		if (data->next_status_repeat_count > 1U) {
+			data->next_status_repeat_count--;
+		} else {
+			data->next_status_repeat_count = 0U;
+			data->next_status_valid = false;
+		}
 	} else {
 		if (!sc1777y_emul_is_valid_command(data)) {
 			sw1 = 0x6AU;

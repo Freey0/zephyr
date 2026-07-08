@@ -21,6 +21,8 @@ int sc1777y_emul_get_last_response(const struct emul *target, uint8_t *buf, size
 void sc1777y_emul_set_ready_delay(const struct emul *target, uint32_t polls_before_ready);
 void sc1777y_emul_corrupt_next_response_lrc(const struct emul *target);
 void sc1777y_emul_set_next_status(const struct emul *target, uint8_t sw1, uint8_t sw2);
+void sc1777y_emul_set_status_repeat(const struct emul *target, uint8_t sw1, uint8_t sw2,
+				      uint32_t repeat_count);
 
 #ifdef __cplusplus
 }
