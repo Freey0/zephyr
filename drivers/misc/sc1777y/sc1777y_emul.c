@@ -209,9 +209,105 @@ static bool sc1777y_emul_is_valid_command(const struct sc1777y_emul_data *data)
 	return data->last_command[data->last_command_len - 1U] == lrc;
 }
 
+static size_t sc1777y_emul_set_random_payload(uint8_t *payload, size_t payload_size, uint8_t p2)
+{
+	size_t len = p2;
+
+	if (len > payload_size) {
+		return 0U;
+	}
+
+	for (size_t i = 0; i < len; i++) {
+		payload[i] = 0xA0 + i;
+	}
+
+	return len;
+}
+
+static size_t sc1777y_emul_set_identity_payload(uint8_t *payload, size_t payload_size)
+{
+	static const uint8_t identity[] = {
+		0x53, 0x43, 0x17, 0x77, 0x00, 0x00, 0x00, 0x01,
+		0x01, 0x02, 0x03, 0x00,
+	};
+
+	if (payload_size < sizeof(identity)) {
+		return 0U;
+	}
+
+	memcpy(payload, identity, sizeof(identity));
+
+	return sizeof(identity);
+}
+
+static size_t sc1777y_emul_set_version_payload(uint8_t *payload, size_t payload_size)
+{
+	if (payload_size < SC1777Y_VERSION_INFO_LEN) {
+		return 0U;
+	}
+
+	for (size_t i = 0; i < SC1777Y_VERSION_INFO_LEN; i++) {
+		payload[i] = 0x30 + i;
+	}
+
+	return SC1777Y_VERSION_INFO_LEN;
+}
+
+static size_t sc1777y_emul_set_serial_payload(uint8_t *payload, size_t payload_size)
+{
+	static const uint8_t serial[] = {0x53, 0x43, 0x17, 0x77, 0x00, 0x00, 0x00, 0x01};
+
+	if (payload_size < sizeof(serial)) {
+		return 0U;
+	}
+
+	memcpy(payload, serial, sizeof(serial));
+
+	return sizeof(serial);
+}
+
+static size_t sc1777y_emul_get_success_payload(const struct sc1777y_emul_data *data, uint8_t *payload,
+					       size_t payload_size)
+{
+	static const uint8_t fallback_payload[] = {0xDE, 0xAD, 0xBE, 0xEF};
+	const uint8_t *cmd = data->last_command;
+	size_t cmd_data_len;
+
+	if (!sc1777y_emul_is_valid_command(data)) {
+		return 0U;
+	}
+
+	cmd_data_len = data->last_command_len - 8U;
+
+	if (cmd[1] == 0x00U && cmd[2] == 0x84U && cmd[3] == 0x00U) {
+		return sc1777y_emul_set_random_payload(payload, payload_size, cmd[4]);
+	}
+
+	if (cmd[1] == 0x80U && cmd[2] == 0xCBU && cmd[4] == 0x00U &&
+	    (cmd[3] == 0x80U || cmd[3] == 0x81U)) {
+		return sc1777y_emul_set_identity_payload(payload, payload_size);
+	}
+
+	if (cmd[1] == 0x80U && cmd[2] == 0xCBU && cmd[3] == 0x00U && cmd[4] == 0x00U) {
+		return sc1777y_emul_set_version_payload(payload, payload_size);
+	}
+
+	if (cmd[1] == 0x00U && cmd[2] == 0xB0U && cmd[3] == 0x99U && cmd[4] == 0x00U &&
+	    cmd_data_len == 2U && cmd[7] == 0x00U && cmd[8] == SC1777Y_SERIAL_LEN) {
+		return sc1777y_emul_set_serial_payload(payload, payload_size);
+	}
+
+	if (payload_size < sizeof(fallback_payload)) {
+		return 0U;
+	}
+
+	memcpy(payload, fallback_payload, sizeof(fallback_payload));
+
+	return sizeof(fallback_payload);
+}
+
 static void sc1777y_emul_prepare_response(struct sc1777y_emul_data *data)
 {
-	static const uint8_t success_payload[] = {0xDE, 0xAD, 0xBE, 0xEF};
 	uint8_t sw1;
 	uint8_t sw2;
 	size_t payload_len;
@@ -228,14 +324,13 @@ static void sc1777y_emul_prepare_response(struct sc1777y_emul_data *data)
 		sw2 = 0x90U;
 	}
 
-	payload_len = (sw1 == 0x90U && sw2 == 0x00U) ? sizeof(success_payload) : 0U;
+	payload_len = (sw1 == 0x90U && sw2 == 0x00U) ?
+		sc1777y_emul_get_success_payload(data, &data->response[4], sizeof(data->response) - 5U) :
+		0U;
 	data->response[0] = sw1;
 	data->response[1] = sw2;
 	data->response[2] = (uint8_t)(payload_len >> 8);
 	data->response[3] = (uint8_t)payload_len;
-	if (payload_len > 0U) {
-		memcpy(&data->response[4], success_payload, payload_len);
-	}
 
 	data->response_len = 4U + payload_len + 1U;
 	data->response[data->response_len - 1U] =

@@ -21,6 +21,20 @@ struct sc1777y_config {
 #define SC1777Y_POLL_TIMEOUT_US 2000000
 #define SC1777Y_RESPONSE_HEADER_LEN 4U
 
+static int sc1777y_command_expect_len(const struct device *dev, const struct sc1777y_command *cmd,
+				      uint8_t *out, size_t len)
+{
+	size_t out_len;
+	int ret;
+
+	ret = sc1777y_command(dev, cmd, out, len, &out_len, NULL);
+	if (ret != 0) {
+		return ret;
+	}
+
+	return out_len == len ? 0 : -EIO;
+}
+
 static uint8_t sc1777y_lrc(const uint8_t *buf, size_t len)
 {
 	uint8_t x = 0U;
@@ -261,6 +275,89 @@ int sc1777y_command(const struct device *dev, const struct sc1777y_command *cmd,
 	}
 
 	return -EIO;
+}
+
+int sc1777y_get_random(const struct device *dev, uint8_t *out, size_t len)
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x00,
+		.ins = 0x84,
+		.p1 = 0x00,
+		.p2 = (uint8_t)len,
+	};
+
+	if (out == NULL || len == 0U || len > UINT8_MAX) {
+		return -EINVAL;
+	}
+
+	return sc1777y_command_expect_len(dev, &cmd, out, len);
+}
+
+int sc1777y_get_sensor_identity(const struct device *dev, struct sc1777y_identity *identity)
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0xCB,
+		.p1 = 0x80,
+		.p2 = 0x00,
+	};
+
+	if (identity == NULL) {
+		return -EINVAL;
+	}
+
+	return sc1777y_command_expect_len(dev, &cmd, (uint8_t *)identity, sizeof(*identity));
+}
+
+int sc1777y_get_update_identity(const struct device *dev, struct sc1777y_identity *identity)
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0xCB,
+		.p1 = 0x81,
+		.p2 = 0x00,
+	};
+
+	if (identity == NULL) {
+		return -EINVAL;
+	}
+
+	return sc1777y_command_expect_len(dev, &cmd, (uint8_t *)identity, sizeof(*identity));
+}
+
+int sc1777y_get_version_info(const struct device *dev, struct sc1777y_version_info *version)
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0xCB,
+		.p1 = 0x00,
+		.p2 = 0x00,
+	};
+
+	if (version == NULL) {
+		return -EINVAL;
+	}
+
+	return sc1777y_command_expect_len(dev, &cmd, version->bytes, sizeof(version->bytes));
+}
+
+int sc1777y_get_serial(const struct device *dev, uint8_t serial[SC1777Y_SERIAL_LEN])
+{
+	static const uint8_t serial_req[] = {0x00, SC1777Y_SERIAL_LEN};
+	const struct sc1777y_command cmd = {
+		.cla = 0x00,
+		.ins = 0xB0,
+		.p1 = 0x99,
+		.p2 = 0x00,
+		.data = serial_req,
+		.data_len = sizeof(serial_req),
+	};
+
+	if (serial == NULL) {
+		return -EINVAL;
+	}
+
+	return sc1777y_command_expect_len(dev, &cmd, serial, SC1777Y_SERIAL_LEN);
 }
 
 static int sc1777y_init(const struct device *dev)

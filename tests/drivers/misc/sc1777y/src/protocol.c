@@ -102,6 +102,7 @@ ZTEST_F(sc1777y, test_emulator_records_response_without_extra_ready_header_byte)
 	size_t out_len;
 	uint8_t response[9];
 	size_t response_len;
+	const uint8_t expected_payload[] = {0xA0, 0xA1, 0xA2, 0xA3};
 
 	zassert_ok(sc1777y_command(fixture->dev, &cmd, out, sizeof(out), &out_len, NULL));
 	zassert_ok(sc1777y_emul_get_last_response(fixture->emul, response, sizeof(response),
@@ -111,10 +112,7 @@ ZTEST_F(sc1777y, test_emulator_records_response_without_extra_ready_header_byte)
 	zassert_equal(0x00, response[1]);
 	zassert_equal(0x00, response[2]);
 	zassert_equal(0x04, response[3]);
-	zassert_equal(0xDE, response[4]);
-	zassert_equal(0xAD, response[5]);
-	zassert_equal(0xBE, response[6]);
-	zassert_equal(0xEF, response[7]);
+	zassert_mem_equal(expected_payload, &response[4], sizeof(expected_payload));
 	zassert_equal(test_lrc(response, response_len - 1U), response[response_len - 1U]);
 }
 
