@@ -19,7 +19,7 @@ struct sc1777y_config {
 #define SC1777Y_MAX_RETRIES 3
 #define SC1777Y_POLL_INTERVAL_US 20
 #define SC1777Y_POLL_TIMEOUT_US 2000000
-#define SC1777Y_RESPONSE_HEADER_LEN 5U
+#define SC1777Y_RESPONSE_HEADER_LEN 4U
 
 static uint8_t sc1777y_lrc(const uint8_t *buf, size_t len)
 {
@@ -155,16 +155,12 @@ static int sc1777y_read_response(const struct spi_dt_spec *bus, uint8_t *respons
 		return ret;
 	}
 
-	if (response[0] != SC1777Y_CMD_HEADER) {
-		return -EIO;
-	}
-
 	if (status != NULL) {
-		status->sw1 = response[1];
-		status->sw2 = response[2];
+		status->sw1 = response[0];
+		status->sw2 = response[1];
 	}
 
-	payload_len = ((uint16_t)response[3] << 8) | response[4];
+	payload_len = ((uint16_t)response[2] << 8) | response[3];
 	if (payload_len > SC1777Y_MAX_DATA_LEN) {
 		return -EIO;
 	}
@@ -179,7 +175,8 @@ static int sc1777y_read_response(const struct spi_dt_spec *bus, uint8_t *respons
 		return ret;
 	}
 
-	if (sc1777y_lrc(&response[1], 4U + payload_len) != response[total_len - 1U]) {
+	if (sc1777y_lrc(response, SC1777Y_RESPONSE_HEADER_LEN + payload_len) !=
+	    response[total_len - 1U]) {
 		return -EBADMSG;
 	}
 

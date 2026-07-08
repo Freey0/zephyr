@@ -95,6 +95,29 @@ ZTEST_F(sc1777y, test_command_polls_until_ready_byte)
 	zassert_equal(1, sc1777y_emul_get_command_count(fixture->emul));
 }
 
+ZTEST_F(sc1777y, test_emulator_records_response_without_extra_ready_header_byte)
+{
+	const struct sc1777y_command cmd = {.cla = 0x00, .ins = 0x84, .p1 = 0x00, .p2 = 0x04};
+	uint8_t out[4];
+	size_t out_len;
+	uint8_t response[9];
+	size_t response_len;
+
+	zassert_ok(sc1777y_command(fixture->dev, &cmd, out, sizeof(out), &out_len, NULL));
+	zassert_ok(sc1777y_emul_get_last_response(fixture->emul, response, sizeof(response),
+						 &response_len));
+	zassert_equal(sizeof(response), response_len);
+	zassert_equal(0x90, response[0]);
+	zassert_equal(0x00, response[1]);
+	zassert_equal(0x00, response[2]);
+	zassert_equal(0x04, response[3]);
+	zassert_equal(0xDE, response[4]);
+	zassert_equal(0xAD, response[5]);
+	zassert_equal(0xBE, response[6]);
+	zassert_equal(0xEF, response[7]);
+	zassert_equal(test_lrc(response, response_len - 1U), response[response_len - 1U]);
+}
+
 ZTEST_F(sc1777y, test_command_retries_after_response_lrc_error)
 {
 	const struct sc1777y_command cmd = {.cla = 0x00, .ins = 0x84, .p1 = 0x00, .p2 = 0x04};
@@ -104,6 +127,20 @@ ZTEST_F(sc1777y, test_command_retries_after_response_lrc_error)
 	sc1777y_emul_corrupt_next_response_lrc(fixture->emul);
 	zassert_ok(sc1777y_command(fixture->dev, &cmd, out, sizeof(out), &out_len, NULL));
 	zassert_equal(2, sc1777y_emul_get_command_count(fixture->emul));
+}
+
+ZTEST_F(sc1777y, test_command_retries_after_6a90_status)
+{
+	const struct sc1777y_command cmd = {.cla = 0x00, .ins = 0x84, .p1 = 0x00, .p2 = 0x04};
+	uint8_t out[4];
+	size_t out_len;
+	struct sc1777y_status status;
+
+	sc1777y_emul_set_next_status(fixture->emul, 0x6A, 0x90);
+	zassert_ok(sc1777y_command(fixture->dev, &cmd, out, sizeof(out), &out_len, &status));
+	zassert_equal(2, sc1777y_emul_get_command_count(fixture->emul));
+	zassert_equal(0x90, status.sw1);
+	zassert_equal(0x00, status.sw2);
 }
 
 ZTEST_F(sc1777y, test_command_returns_access_error_for_auth_failure)

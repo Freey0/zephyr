@@ -74,6 +74,26 @@ int sc1777y_emul_get_last_command(const struct emul *target, uint8_t *buf, size_
 	return 0;
 }
 
+int sc1777y_emul_get_last_response(const struct emul *target, uint8_t *buf, size_t buf_size,
+				   size_t *response_len)
+{
+	struct sc1777y_emul_data *data;
+
+	if (target == NULL || buf == NULL || response_len == NULL) {
+		return -EINVAL;
+	}
+
+	data = target->data;
+	if (buf_size < data->response_len) {
+		return -ENOMEM;
+	}
+
+	memcpy(buf, data->response, data->response_len);
+	*response_len = data->response_len;
+
+	return 0;
+}
+
 void sc1777y_emul_set_ready_delay(const struct emul *target, uint32_t polls_before_ready)
 {
 	struct sc1777y_emul_data *data = target->data;
@@ -151,6 +171,21 @@ static void sc1777y_emul_fill_rx_bytes(const struct spi_buf_set *rx_bufs, const 
 	}
 }
 
+static size_t sc1777y_emul_total_rx_len(const struct spi_buf_set *rx_bufs)
+{
+	size_t total = 0U;
+
+	if (rx_bufs == NULL) {
+		return 0U;
+	}
+
+	for (size_t i = 0; i < rx_bufs->count; i++) {
+		total += rx_bufs->buffers[i].len;
+	}
+
+	return total;
+}
+
 static bool sc1777y_emul_is_valid_command(const struct sc1777y_emul_data *data)
 {
 	uint16_t encoded_data_len;
@@ -194,18 +229,17 @@ static void sc1777y_emul_prepare_response(struct sc1777y_emul_data *data)
 	}
 
 	payload_len = (sw1 == 0x90U && sw2 == 0x00U) ? sizeof(success_payload) : 0U;
-	data->response[0] = 0x55U;
-	data->response[1] = sw1;
-	data->response[2] = sw2;
-	data->response[3] = (uint8_t)(payload_len >> 8);
-	data->response[4] = (uint8_t)payload_len;
+	data->response[0] = sw1;
+	data->response[1] = sw2;
+	data->response[2] = (uint8_t)(payload_len >> 8);
+	data->response[3] = (uint8_t)payload_len;
 	if (payload_len > 0U) {
-		memcpy(&data->response[5], success_payload, payload_len);
+		memcpy(&data->response[4], success_payload, payload_len);
 	}
 
-	data->response_len = 5U + payload_len + 1U;
+	data->response_len = 4U + payload_len + 1U;
 	data->response[data->response_len - 1U] =
-		sc1777y_emul_lrc(&data->response[1], 4U + payload_len);
+		sc1777y_emul_lrc(data->response, 4U + payload_len);
 	if (data->corrupt_next_response_lrc) {
 		data->response[data->response_len - 1U] ^= 0xFFU;
 		data->corrupt_next_response_lrc = false;
@@ -249,7 +283,7 @@ static int sc1777y_emul_io(const struct emul *target, const struct spi_config *c
 
 	sc1777y_emul_fill_rx_bytes(rx_bufs, &data->response[data->response_offset],
 				   data->response_len - data->response_offset);
-	data->response_offset += MIN(rx_bufs->buffers[0].len,
+	data->response_offset += MIN(sc1777y_emul_total_rx_len(rx_bufs),
 				     data->response_len - data->response_offset);
 
 	return 0;
