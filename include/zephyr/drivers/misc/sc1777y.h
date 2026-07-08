@@ -3,11 +3,29 @@
 #ifndef ZEPHYR_INCLUDE_DRIVERS_MISC_SC1777Y_H_
 #define ZEPHYR_INCLUDE_DRIVERS_MISC_SC1777Y_H_
 
+#include <stddef.h>
+#include <stdint.h>
+
+#include <zephyr/device.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Public semantic APIs for SC1777Y chapter 5 flows will be added here. */
+#define SC1777Y_MAX_DATA_LEN 255U
+#define SC1777Y_MAX_FRAME_LEN (SC1777Y_MAX_DATA_LEN + 8U)
+
+struct sc1777y_command {
+	uint8_t cla;
+	uint8_t ins;
+	uint8_t p1;
+	uint8_t p2;
+	const uint8_t *data;
+	size_t data_len;
+};
+
+int sc1777y_command(const struct device *dev, const struct sc1777y_command *cmd, uint8_t *out,
+		    size_t out_size, size_t *out_len, uint16_t *status);
 
 #ifdef __cplusplus
 }
