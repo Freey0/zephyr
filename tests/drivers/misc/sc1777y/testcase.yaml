@@ -1,0 +1,4 @@
+tests:
+  drivers.misc.sc1777y:
+    platform_allow:
+      - native_sim
