@@ -61,6 +61,7 @@ venv
 .envrc
 .DS_Store
 .clangd
+.worktrees/
 new.info
 
 # Cargo drops lock files in projects to capture resolved dependencies.
