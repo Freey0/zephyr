@@ -35,39 +35,30 @@
 - 会话协商：会话发起、请求/应答报文 Hash、签名、验签、生成安全认证响应、确认会话。
 - 会话载荷加解密：生成 IV 随机数、加密、解密。
 
-### 公共 API 实现层
+### 驱动实现
 
 新增 `drivers/misc/sc1777y/sc1777y.c`。
 
-该文件实现 `include/zephyr/drivers/misc/sc1777y.h` 暴露的所有公共函数。它是 sample 和应用实际调用的实现入口，不直接暴露 SPI 传输细节。
+该文件实现 `include/zephyr/drivers/misc/sc1777y.h` 暴露的所有公共函数。它是 sample 和应用实际调用的实现入口。
 
-公共 API 实现层负责：
+`sc1777y.c` 同时包含 SC1777Y 私有传输 helper。这些 helper 使用 `static` 函数实现，不放到单独源文件，也不暴露给应用或 sample。
+
+驱动实现负责：
 
 - 校验 API 参数、枚举值、输入长度和输出缓冲区大小。
 - 将语义接口参数转换为芯片命令的 CLA、INS、P1、P2、长度和 DATA。
-- 调用私有传输层发送命令并接收响应。
+- 通过私有 helper 配置 SPI mode 3。
+- 通过私有 helper 构造命令帧：`55 CLA INS P1 P2 Len1 Len2 DATA LRC1`。
+- 通过私有 helper 按字节异或后取反计算 LRC。
+- 通过私有 helper 读取直到 `0x55` 来查询命令执行完成。
+- 通过私有 helper 解析响应帧：`SW1 SW2 Len1 Len2 DATA LRC2`。
+- 通过私有 helper 校验响应 LRC。
+- 对发送 LRC 错误状态 `6A90` 和接收 LRC 错误执行重发，最多 3 次。
 - 将响应 DATA 解析为语义结果结构或调用者输出缓冲区。
 - 将芯片状态字转换为公共 API 返回值，并在需要时填充 `sw1`、`sw2`。
 - 实现 `sc1777y_command()` 低层兜底接口，但仍复用同一套传输、LRC、查询、重发和状态处理。
 
-公共 API 实现层不允许 sample 传入 CLA/INS 来完成第 5 章已封装流程。CLA/INS 只在驱动内部使用，测试通过模拟器捕获字节帧来验证编码是否正确。
-
-### 私有传输层
-
-新增 `drivers/misc/sc1777y/sc1777y_transport.c` 和私有头文件 `drivers/misc/sc1777y/sc1777y_transport.h`。
-
-私有传输层负责：
-
-- 配置 SPI mode 3。
-- 构造命令帧：`55 CLA INS P1 P2 Len1 Len2 DATA LRC1`。
-- 按字节异或后取反计算 LRC。
-- 通过读取直到 `0x55` 来查询命令执行完成。
-- 解析响应帧：`SW1 SW2 Len1 Len2 DATA LRC2`。
-- 校验响应 LRC。
-- 对发送 LRC 错误状态 `6A90` 和接收 LRC 错误执行重发，最多 3 次。
-- 将芯片状态字映射为负 errno，同时在需要时通过结果结构保留原始 `sw1`、`sw2`。
-
-传输层不暴露为通用 SPI helper。它保持为 SC1777Y 驱动私有实现，因为时序、查询、LRC 和状态模型都属于该芯片协议。
+sample 不允许传入 CLA/INS 来完成第 5 章已封装流程。CLA/INS 只在 `sc1777y.c` 内部使用，测试通过模拟器捕获字节帧来验证编码是否正确。
 
 ### 模拟器
 
@@ -96,7 +87,7 @@
 
 - `CONFIG_SC1777Y` 依赖 `DT_HAS_*_SC1777Y_ENABLED`，并选择 `SPI`。
 - `CONFIG_EMUL_SC1777Y` 依赖 `SC1777Y` 和 `EMUL`。
-- `CONFIG_SC1777Y` 编译 `sc1777y.c` 和 `sc1777y_transport.c`。
+- `CONFIG_SC1777Y` 编译 `sc1777y.c`。
 - `CONFIG_EMUL_SC1777Y` 额外编译 `sc1777y_emul.c`。
 
 从 `drivers/misc/CMakeLists.txt` 注册 `drivers/misc/sc1777y`，并从 `drivers/misc/Kconfig` 引入该驱动的 Kconfig。
@@ -180,6 +171,6 @@ API 明确传入缓冲区大小。驱动不会越界写调用者缓冲区，并�
 
 - 驱动可以为 native_sim 构建。
 - 模拟器按字节级校验 SC1777Y SPI 帧。
-- 测试覆盖全部公共语义 API 和传输层重试/错误路径。
+- 测试覆盖全部公共语义 API 和私有传输 helper 的重试/错误路径。
 - sample 在 native_sim 上挂载模拟器，并只通过语义 API 验证第 5 章全部交互。
 - sample 代码不包含 SC1777Y CLA/INS 命令字面量，也不包含 LRC 处理。
