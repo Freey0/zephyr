@@ -15,8 +15,18 @@
 
 struct sc1777y_emul_data {
 	uint32_t command_count;
+	uint32_t ready_delay;
+	uint32_t ready_polls_remaining;
 	uint8_t last_command[SC1777Y_MAX_FRAME_LEN];
 	size_t last_command_len;
+	uint8_t response[SC1777Y_MAX_FRAME_LEN];
+	size_t response_len;
+	size_t response_offset;
+	bool response_ready;
+	bool corrupt_next_response_lrc;
+	bool next_status_valid;
+	uint8_t next_status_sw1;
+	uint8_t next_status_sw2;
 };
 
 static uint8_t sc1777y_emul_lrc(const uint8_t *buf, size_t len)
@@ -62,6 +72,29 @@ int sc1777y_emul_get_last_command(const struct emul *target, uint8_t *buf, size_
 	*command_len = data->last_command_len;
 
 	return 0;
+}
+
+void sc1777y_emul_set_ready_delay(const struct emul *target, uint32_t polls_before_ready)
+{
+	struct sc1777y_emul_data *data = target->data;
+
+	data->ready_delay = polls_before_ready;
+}
+
+void sc1777y_emul_corrupt_next_response_lrc(const struct emul *target)
+{
+	struct sc1777y_emul_data *data = target->data;
+
+	data->corrupt_next_response_lrc = true;
+}
+
+void sc1777y_emul_set_next_status(const struct emul *target, uint8_t sw1, uint8_t sw2)
+{
+	struct sc1777y_emul_data *data = target->data;
+
+	data->next_status_sw1 = sw1;
+	data->next_status_sw2 = sw2;
+	data->next_status_valid = true;
 }
 
 static size_t sc1777y_emul_copy_tx_bytes(struct sc1777y_emul_data *data,
@@ -141,22 +174,83 @@ static bool sc1777y_emul_is_valid_command(const struct sc1777y_emul_data *data)
 	return data->last_command[data->last_command_len - 1U] == lrc;
 }
 
+static void sc1777y_emul_prepare_response(struct sc1777y_emul_data *data)
+{
+	static const uint8_t success_payload[] = {0xDE, 0xAD, 0xBE, 0xEF};
+	uint8_t sw1;
+	uint8_t sw2;
+	size_t payload_len;
+
+	if (data->next_status_valid) {
+		sw1 = data->next_status_sw1;
+		sw2 = data->next_status_sw2;
+		data->next_status_valid = false;
+	} else if (sc1777y_emul_is_valid_command(data)) {
+		sw1 = 0x90U;
+		sw2 = 0x00U;
+	} else {
+		sw1 = 0x6AU;
+		sw2 = 0x90U;
+	}
+
+	payload_len = (sw1 == 0x90U && sw2 == 0x00U) ? sizeof(success_payload) : 0U;
+	data->response[0] = 0x55U;
+	data->response[1] = sw1;
+	data->response[2] = sw2;
+	data->response[3] = (uint8_t)(payload_len >> 8);
+	data->response[4] = (uint8_t)payload_len;
+	if (payload_len > 0U) {
+		memcpy(&data->response[5], success_payload, payload_len);
+	}
+
+	data->response_len = 5U + payload_len + 1U;
+	data->response[data->response_len - 1U] =
+		sc1777y_emul_lrc(&data->response[1], 4U + payload_len);
+	if (data->corrupt_next_response_lrc) {
+		data->response[data->response_len - 1U] ^= 0xFFU;
+		data->corrupt_next_response_lrc = false;
+	}
+
+	data->response_offset = 0U;
+	data->ready_polls_remaining = data->ready_delay;
+	data->response_ready = false;
+}
+
 static int sc1777y_emul_io(const struct emul *target, const struct spi_config *config,
 			   const struct spi_buf_set *tx_bufs, const struct spi_buf_set *rx_bufs)
 {
-	static const uint8_t valid_response[] = {0x90, 0x00, 0x00, 0x00, 0x6F};
-	static const uint8_t invalid_response[] = {0x6A, 0x90, 0x00, 0x00, 0x95};
 	struct sc1777y_emul_data *data = target->data;
+	size_t tx_len;
 
 	ARG_UNUSED(config);
 
-	data->last_command_len = sc1777y_emul_copy_tx_bytes(data, tx_bufs);
-	data->command_count++;
-	if (sc1777y_emul_is_valid_command(data)) {
-		sc1777y_emul_fill_rx_bytes(rx_bufs, valid_response, sizeof(valid_response));
-	} else {
-		sc1777y_emul_fill_rx_bytes(rx_bufs, invalid_response, sizeof(invalid_response));
+	tx_len = sc1777y_emul_copy_tx_bytes(data, tx_bufs);
+	if (tx_len > 0U) {
+		data->last_command_len = tx_len;
+		data->command_count++;
+		sc1777y_emul_prepare_response(data);
+		return 0;
 	}
+
+	if (rx_bufs != NULL && rx_bufs->count == 1U && rx_bufs->buffers[0].len == 1U &&
+	    !data->response_ready) {
+		uint8_t ready = 0U;
+
+		if (data->ready_polls_remaining == 0U) {
+			ready = 0x55U;
+			data->response_ready = true;
+		} else {
+			data->ready_polls_remaining--;
+		}
+
+		sc1777y_emul_fill_rx_bytes(rx_bufs, &ready, sizeof(ready));
+		return 0;
+	}
+
+	sc1777y_emul_fill_rx_bytes(rx_bufs, &data->response[data->response_offset],
+				   data->response_len - data->response_offset);
+	data->response_offset += MIN(rx_bufs->buffers[0].len,
+				     data->response_len - data->response_offset);
 
 	return 0;
 }

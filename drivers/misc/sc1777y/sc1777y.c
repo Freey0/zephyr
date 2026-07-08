@@ -8,10 +8,18 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/misc/sc1777y.h>
 #include <zephyr/drivers/spi.h>
+#include <zephyr/kernel.h>
 
 struct sc1777y_config {
 	struct spi_dt_spec bus;
 };
+
+#define SC1777Y_CMD_HEADER 0x55
+#define SC1777Y_READY_BYTE 0x55
+#define SC1777Y_MAX_RETRIES 3
+#define SC1777Y_POLL_INTERVAL_US 20
+#define SC1777Y_POLL_TIMEOUT_US 2000000
+#define SC1777Y_RESPONSE_HEADER_LEN 5U
 
 static uint8_t sc1777y_lrc(const uint8_t *buf, size_t len)
 {
@@ -22,6 +30,24 @@ static uint8_t sc1777y_lrc(const uint8_t *buf, size_t len)
 	}
 
 	return (uint8_t)~x;
+}
+
+static int sc1777y_status_to_errno(uint8_t sw1, uint8_t sw2)
+{
+	if (sw1 == 0x90 && sw2 == 0x00) {
+		return 0;
+	}
+	if (sw1 == 0x63 || sw1 == 0x69) {
+		return -EACCES;
+	}
+	if (sw1 == 0x6A && sw2 == 0x90) {
+		return -EIO;
+	}
+	if (sw1 == 0x6D || sw1 == 0x6E || (sw1 == 0x6A && sw2 == 0x81)) {
+		return -ENOTSUP;
+	}
+
+	return -EIO;
 }
 
 static int sc1777y_build_frame(const struct sc1777y_command *cmd, uint8_t *frame, size_t frame_size,
@@ -37,7 +63,7 @@ static int sc1777y_build_frame(const struct sc1777y_command *cmd, uint8_t *frame
 		return -ENOMEM;
 	}
 
-	frame[0] = 0x55;
+	frame[0] = SC1777Y_CMD_HEADER;
 	frame[1] = cmd->cla;
 	frame[2] = cmd->ins;
 	frame[3] = cmd->p1;
@@ -55,27 +81,123 @@ static int sc1777y_build_frame(const struct sc1777y_command *cmd, uint8_t *frame
 	return 0;
 }
 
-int sc1777y_command(const struct device *dev, const struct sc1777y_command *cmd, uint8_t *out,
-		    size_t out_size, size_t *out_len, uint16_t *status)
+static int sc1777y_write_frame(const struct spi_dt_spec *bus, uint8_t *frame, size_t frame_len)
 {
-	const struct sc1777y_config *cfg;
-	uint8_t frame[SC1777Y_MAX_FRAME_LEN];
-	uint8_t response[SC1777Y_MAX_FRAME_LEN];
 	struct spi_buf tx_buf = {
 		.buf = frame,
-	};
-	struct spi_buf rx_buf = {
-		.buf = response,
+		.len = frame_len,
 	};
 	const struct spi_buf_set tx_bufs = {
 		.buffers = &tx_buf,
 		.count = 1U,
 	};
+
+	return spi_write_dt(bus, &tx_bufs);
+}
+
+static int sc1777y_poll_ready(const struct spi_dt_spec *bus)
+{
+	uint8_t ready = 0U;
+	struct spi_buf rx_buf = {
+		.buf = &ready,
+		.len = sizeof(ready),
+	};
 	const struct spi_buf_set rx_bufs = {
 		.buffers = &rx_buf,
 		.count = 1U,
 	};
+
+	for (uint32_t waited = 0U; waited < SC1777Y_POLL_TIMEOUT_US;
+	     waited += SC1777Y_POLL_INTERVAL_US) {
+		int ret = spi_read_dt(bus, &rx_bufs);
+
+		if (ret != 0) {
+			return ret;
+		}
+
+		if (ready == SC1777Y_READY_BYTE) {
+			return 0;
+		}
+
+		k_busy_wait(SC1777Y_POLL_INTERVAL_US);
+	}
+
+	return -ETIMEDOUT;
+}
+
+static int sc1777y_read_bytes(const struct spi_dt_spec *bus, uint8_t *buf, size_t len)
+{
+	struct spi_buf rx_buf = {
+		.buf = buf,
+		.len = len,
+	};
+	const struct spi_buf_set rx_bufs = {
+		.buffers = &rx_buf,
+		.count = 1U,
+	};
+
+	return spi_read_dt(bus, &rx_bufs);
+}
+
+static int sc1777y_read_response(const struct spi_dt_spec *bus, uint8_t *response, size_t response_size,
+				 size_t *response_len, struct sc1777y_status *status)
+{
+	uint16_t payload_len;
+	size_t total_len;
+	int ret;
+
+	if (response_size < SC1777Y_RESPONSE_HEADER_LEN + 1U) {
+		return -ENOMEM;
+	}
+
+	ret = sc1777y_read_bytes(bus, response, SC1777Y_RESPONSE_HEADER_LEN);
+	if (ret != 0) {
+		return ret;
+	}
+
+	if (response[0] != SC1777Y_CMD_HEADER) {
+		return -EIO;
+	}
+
+	if (status != NULL) {
+		status->sw1 = response[1];
+		status->sw2 = response[2];
+	}
+
+	payload_len = ((uint16_t)response[3] << 8) | response[4];
+	if (payload_len > SC1777Y_MAX_DATA_LEN) {
+		return -EIO;
+	}
+
+	total_len = SC1777Y_RESPONSE_HEADER_LEN + payload_len + 1U;
+	if (total_len > response_size) {
+		return -ENOMEM;
+	}
+
+	ret = sc1777y_read_bytes(bus, &response[SC1777Y_RESPONSE_HEADER_LEN], payload_len + 1U);
+	if (ret != 0) {
+		return ret;
+	}
+
+	if (sc1777y_lrc(&response[1], 4U + payload_len) != response[total_len - 1U]) {
+		return -EBADMSG;
+	}
+
+	*response_len = total_len;
+
+	return 0;
+}
+
+int sc1777y_command(const struct device *dev, const struct sc1777y_command *cmd, uint8_t *out,
+		    size_t out_size, size_t *out_len, struct sc1777y_status *status)
+{
+	const struct sc1777y_config *cfg;
+	uint8_t frame[SC1777Y_MAX_FRAME_LEN];
+	uint8_t response[SC1777Y_MAX_FRAME_LEN];
 	size_t frame_len;
+	size_t response_len;
+	size_t payload_len;
+	struct sc1777y_status local_status = {0};
 	int ret;
 
 	if (dev == NULL || out_len == NULL || (out_size > 0U && out == NULL)) {
@@ -88,21 +210,60 @@ int sc1777y_command(const struct device *dev, const struct sc1777y_command *cmd,
 	}
 
 	cfg = dev->config;
-	tx_buf.len = frame_len;
-	rx_buf.len = frame_len;
+	*out_len = 0U;
 
-	ret = spi_transceive_dt(&cfg->bus, &tx_bufs, &rx_bufs);
-	if (ret != 0) {
+	for (int attempt = 0; attempt < SC1777Y_MAX_RETRIES; attempt++) {
+		ret = sc1777y_write_frame(&cfg->bus, frame, frame_len);
+		if (ret != 0) {
+			return ret;
+		}
+
+		ret = sc1777y_poll_ready(&cfg->bus);
+		if (ret != 0) {
+			return ret;
+		}
+
+		ret = sc1777y_read_response(&cfg->bus, response, sizeof(response), &response_len,
+					    &local_status);
+		if (ret == -EBADMSG) {
+			continue;
+		}
+		if (ret != 0) {
+			return ret;
+		}
+
+		ret = sc1777y_status_to_errno(local_status.sw1, local_status.sw2);
+		if (ret == 0) {
+			payload_len = response_len - SC1777Y_RESPONSE_HEADER_LEN - 1U;
+			if (payload_len > out_size) {
+				return -ENOMEM;
+			}
+			if (payload_len > 0U) {
+				memcpy(out, &response[SC1777Y_RESPONSE_HEADER_LEN], payload_len);
+			}
+			*out_len = payload_len;
+			if (status != NULL) {
+				*status = local_status;
+			}
+			return 0;
+		}
+
+		if (local_status.sw1 == 0x6A && local_status.sw2 == 0x90 &&
+		    attempt + 1 < SC1777Y_MAX_RETRIES) {
+			continue;
+		}
+
+		if (status != NULL) {
+			*status = local_status;
+		}
 		return ret;
 	}
 
-	*out_len = 0U;
-
 	if (status != NULL) {
-		*status = ((uint16_t)response[0] << 8) | response[1];
+		*status = local_status;
 	}
 
-	return 0;
+	return -EIO;
 }
 
 static int sc1777y_init(const struct device *dev)

@@ -24,8 +24,13 @@ struct sc1777y_command {
 	size_t data_len;
 };
 
+struct sc1777y_status {
+	uint8_t sw1;
+	uint8_t sw2;
+};
+
 int sc1777y_command(const struct device *dev, const struct sc1777y_command *cmd, uint8_t *out,
-		    size_t out_size, size_t *out_len, uint16_t *status);
+		    size_t out_size, size_t *out_len, struct sc1777y_status *status);
 
 #ifdef __cplusplus
 }

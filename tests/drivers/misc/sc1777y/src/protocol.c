@@ -52,7 +52,7 @@ ZTEST_F(sc1777y, test_raw_command_accepts_max_payload_and_records_boundary_frame
 	static uint8_t payload[TEST_MAX_RAW_PAYLOAD_LEN];
 	uint8_t out[8];
 	size_t out_len;
-	uint16_t status;
+	struct sc1777y_status status;
 	static uint8_t frame[TEST_MAX_RAW_PAYLOAD_LEN + 8U];
 	size_t frame_len;
 	struct sc1777y_command cmd = {
@@ -69,7 +69,8 @@ ZTEST_F(sc1777y, test_raw_command_accepts_max_payload_and_records_boundary_frame
 	}
 
 	zassert_ok(sc1777y_command(fixture->dev, &cmd, out, sizeof(out), &out_len, &status));
-	zassert_equal(0x9000, status);
+	zassert_equal(0x90, status.sw1);
+	zassert_equal(0x00, status.sw2);
 	zassert_ok(sc1777y_emul_get_last_command(fixture->emul, frame, sizeof(frame), &frame_len));
 	zassert_equal(TEST_MAX_RAW_PAYLOAD_LEN + 8U, frame_len);
 	zassert_equal(0x55, frame[0]);
@@ -80,4 +81,41 @@ ZTEST_F(sc1777y, test_raw_command_accepts_max_payload_and_records_boundary_frame
 	zassert_equal(payload[0], frame[7]);
 	zassert_equal(payload[sizeof(payload) - 1], frame[frame_len - 2]);
 	zassert_equal(test_lrc(&frame[1], frame_len - 2), frame[frame_len - 1]);
+}
+
+ZTEST_F(sc1777y, test_command_polls_until_ready_byte)
+{
+	const struct sc1777y_command cmd = {.cla = 0x00, .ins = 0x84, .p1 = 0x00, .p2 = 0x04};
+	uint8_t out[4];
+	size_t out_len;
+
+	sc1777y_emul_set_ready_delay(fixture->emul, 3);
+	zassert_ok(sc1777y_command(fixture->dev, &cmd, out, sizeof(out), &out_len, NULL));
+	zassert_equal(4, out_len);
+	zassert_equal(1, sc1777y_emul_get_command_count(fixture->emul));
+}
+
+ZTEST_F(sc1777y, test_command_retries_after_response_lrc_error)
+{
+	const struct sc1777y_command cmd = {.cla = 0x00, .ins = 0x84, .p1 = 0x00, .p2 = 0x04};
+	uint8_t out[4];
+	size_t out_len;
+
+	sc1777y_emul_corrupt_next_response_lrc(fixture->emul);
+	zassert_ok(sc1777y_command(fixture->dev, &cmd, out, sizeof(out), &out_len, NULL));
+	zassert_equal(2, sc1777y_emul_get_command_count(fixture->emul));
+}
+
+ZTEST_F(sc1777y, test_command_returns_access_error_for_auth_failure)
+{
+	const struct sc1777y_command cmd = {.cla = 0x80, .ins = 0x08, .p1 = 0x01, .p2 = 0x04};
+	uint8_t out[4];
+	size_t out_len;
+	struct sc1777y_status status;
+
+	sc1777y_emul_set_next_status(fixture->emul, 0x63, 0x00);
+	zassert_equal(-EACCES,
+		      sc1777y_command(fixture->dev, &cmd, out, sizeof(out), &out_len, &status));
+	zassert_equal(0x63, status.sw1);
+	zassert_equal(0x00, status.sw2);
 }
