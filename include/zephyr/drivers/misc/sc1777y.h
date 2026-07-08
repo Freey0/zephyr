@@ -18,6 +18,16 @@ extern "C" {
 #define SC1777Y_KEY_VERSION_LEN 4U
 #define SC1777Y_IDENTITY_LEN (SC1777Y_SERIAL_LEN + SC1777Y_KEY_VERSION_LEN)
 #define SC1777Y_VERSION_INFO_LEN 64U
+#define SC1777Y_PLATFORM_PUBLIC_KEY_LEN 64U
+#define SC1777Y_AK_LEN 16U
+#define SC1777Y_IV_LEN 16U
+#define SC1777Y_HASH_LEN 32U
+#define SC1777Y_SIGNATURE_LEN 64U
+#define SC1777Y_AUTH_FACTOR_LEN 32U
+#define SC1777Y_AUTH_RESPONSE_LEN 146U
+#define SC1777Y_SESSION_RANDOM_LEN 128U
+#define SC1777Y_SESSION_DKHASH_LEN 32U
+#define SC1777Y_BLOCK16_MIN_LEN 16U
 
 struct sc1777y_command {
 	uint8_t cla;
@@ -36,6 +46,22 @@ struct sc1777y_status {
 enum sc1777y_sensor_type {
 	SC1777Y_SENSOR_LEGACY = 0,
 	SC1777Y_SENSOR_NEW = 1,
+};
+
+enum sc1777y_platform_type {
+	SC1777Y_PLATFORM_UNSET = 0,
+	SC1777Y_PLATFORM_NANRUI = 1,
+	SC1777Y_PLATFORM_WANGAN = 2,
+};
+
+enum sc1777y_cert_request_format {
+	SC1777Y_CERT_REQUEST_FORMAT_1 = 0,
+	SC1777Y_CERT_REQUEST_FORMAT_2 = 1,
+};
+
+enum sc1777y_hash_target {
+	SC1777Y_HASH_REQUEST = 0,
+	SC1777Y_HASH_RESPONSE = 1,
 };
 
 struct sc1777y_identity {
@@ -75,6 +101,34 @@ int sc1777y_apply_key_update(const struct device *dev, const uint8_t *key_data,
 			     size_t key_data_len);
 int sc1777y_get_version_info(const struct device *dev, struct sc1777y_version_info *version);
 int sc1777y_get_serial(const struct device *dev, uint8_t serial[SC1777Y_SERIAL_LEN]);
+int sc1777y_import_platform_public_key(const struct device *dev,
+				       const uint8_t key64[SC1777Y_PLATFORM_PUBLIC_KEY_LEN]);
+int sc1777y_import_ak(const struct device *dev, const uint8_t ak16[SC1777Y_AK_LEN]);
+int sc1777y_import_iv(const struct device *dev, const uint8_t iv16[SC1777Y_IV_LEN]);
+int sc1777y_set_platform_type(const struct device *dev, enum sc1777y_platform_type type);
+int sc1777y_get_platform_type(const struct device *dev, enum sc1777y_platform_type *type);
+int sc1777y_generate_sm2_keypair(const struct device *dev);
+int sc1777y_generate_cert_request(const struct device *dev,
+				  enum sc1777y_cert_request_format format,
+				  const uint8_t *subject, size_t subject_len,
+				  uint8_t *out, size_t out_size, size_t *out_len);
+int sc1777y_session_begin(const struct device *dev, uint8_t en_r1[SC1777Y_SESSION_RANDOM_LEN]);
+int sc1777y_hash(const struct device *dev, enum sc1777y_hash_target target,
+		 const uint8_t *data, size_t len, uint8_t hash32[SC1777Y_HASH_LEN]);
+int sc1777y_sign_hash(const struct device *dev, const uint8_t hash32[SC1777Y_HASH_LEN],
+		      uint8_t signature64[SC1777Y_SIGNATURE_LEN]);
+int sc1777y_verify_signature(const struct device *dev, const uint8_t hash32[SC1777Y_HASH_LEN],
+			     const uint8_t signature64[SC1777Y_SIGNATURE_LEN]);
+int sc1777y_generate_auth_response(const struct device *dev,
+				   const uint8_t factor32[SC1777Y_AUTH_FACTOR_LEN],
+				   uint8_t response146[SC1777Y_AUTH_RESPONSE_LEN]);
+int sc1777y_session_confirm(const struct device *dev,
+			    const uint8_t en_r2_128[SC1777Y_SESSION_RANDOM_LEN],
+			    uint8_t dkhash32[SC1777Y_SESSION_DKHASH_LEN]);
+int sc1777y_session_encrypt(const struct device *dev, const uint8_t *in, size_t in_len,
+			    uint8_t *out, size_t out_size, size_t *out_len);
+int sc1777y_session_decrypt(const struct device *dev, const uint8_t *in, size_t in_len,
+			    uint8_t *out, size_t out_size, size_t *out_len);
 
 #ifdef __cplusplus
 }

@@ -6,4 +6,4 @@ project(sc1777y)
 
 target_include_directories(app PRIVATE include)
 target_sources(app PRIVATE src/fixture.c src/protocol.c src/api_errors.c src/api_basic.c
-			   src/api_sensor.c src/api_update.c)
+			   src/api_sensor.c src/api_update.c src/api_platform.c)

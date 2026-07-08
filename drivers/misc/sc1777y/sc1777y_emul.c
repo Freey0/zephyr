@@ -13,10 +13,13 @@
 #include <zephyr/drivers/spi_emul.h>
 #include <zephyr/sys/util.h>
 
+#define SC1777Y_CERT_REQUEST_PREFIX "SC1777Y-CERT-REQUEST:"
+
 struct sc1777y_emul_data {
 	uint32_t command_count;
 	uint32_t ready_delay;
 	uint32_t ready_polls_remaining;
+	uint8_t platform_type;
 	uint8_t last_command[SC1777Y_MAX_FRAME_LEN];
 	size_t last_command_len;
 	uint8_t response[SC1777Y_MAX_FRAME_LEN];
@@ -45,6 +48,7 @@ void sc1777y_emul_reset(const struct emul *target)
 	struct sc1777y_emul_data *data = target->data;
 
 	memset(data, 0, sizeof(*data));
+	data->platform_type = SC1777Y_PLATFORM_NANRUI;
 }
 
 uint32_t sc1777y_emul_get_command_count(const struct emul *target)
@@ -306,7 +310,56 @@ static size_t sc1777y_emul_xor_payload(const uint8_t *input, size_t input_len, u
 	return input_len;
 }
 
-static bool sc1777y_emul_prepare_success_payload(const struct sc1777y_emul_data *data, uint8_t *payload,
+static size_t sc1777y_emul_fill_incrementing(uint8_t *payload, size_t payload_size, size_t len,
+					     uint8_t base)
+{
+	if (payload_size < len) {
+		return 0U;
+	}
+
+	for (size_t i = 0; i < len; i++) {
+		payload[i] = base + i;
+	}
+
+	return len;
+}
+
+static size_t sc1777y_emul_set_cert_request_payload(const uint8_t *subject, size_t subject_len,
+						    uint8_t *payload, size_t payload_size)
+{
+	static const char prefix[] = SC1777Y_CERT_REQUEST_PREFIX;
+	size_t prefix_len = sizeof(prefix) - 1U;
+	size_t copy_len;
+
+	if (payload_size < prefix_len) {
+		return 0U;
+	}
+
+	memcpy(payload, prefix, prefix_len);
+	copy_len = MIN(subject_len, payload_size - prefix_len);
+	if (copy_len > 0U) {
+		memcpy(&payload[prefix_len], subject, copy_len);
+	}
+
+	return prefix_len + copy_len;
+}
+
+static size_t sc1777y_emul_xor_payload_with_mask(const uint8_t *input, size_t input_len,
+						 uint8_t *payload, size_t payload_size,
+						 uint8_t mask)
+{
+	if (input_len > payload_size) {
+		return 0U;
+	}
+
+	for (size_t i = 0; i < input_len; i++) {
+		payload[i] = input[i] ^ mask;
+	}
+
+	return input_len;
+}
+
+static bool sc1777y_emul_prepare_success_payload(struct sc1777y_emul_data *data, uint8_t *payload,
 						 size_t payload_size, size_t *payload_len)
 {
 	const uint8_t *cmd = data->last_command;
@@ -388,6 +441,95 @@ static bool sc1777y_emul_prepare_success_payload(const struct sc1777y_emul_data 
 	if (cmd[1] == 0x80U && cmd[2] == 0x22U && cmd[3] == 0x02U && cmd[4] == 0x01U &&
 	    cmd_data_len > 0U && cmd_data_len <= SC1777Y_MAX_DATA_LEN) {
 		*payload_len = 0U;
+		return true;
+	}
+
+	if (cmd[1] == 0x80U && cmd[2] == 0x30U && cmd[3] == 0x01U && cmd[4] == 0x01U &&
+	    cmd_data_len == SC1777Y_PLATFORM_PUBLIC_KEY_LEN) {
+		*payload_len = 0U;
+		return true;
+	}
+
+	if (cmd[1] == 0x80U && cmd[2] == 0x26U && (cmd[3] == 0x02U || cmd[3] == 0x04U) &&
+	    cmd[4] == 0x00U && cmd_data_len == SC1777Y_AK_LEN) {
+		*payload_len = 0U;
+		return true;
+	}
+
+	if (cmd[1] == 0x80U && cmd[2] == 0x3EU && cmd[3] == 0x00U &&
+	    (cmd[4] == SC1777Y_PLATFORM_NANRUI || cmd[4] == SC1777Y_PLATFORM_WANGAN) &&
+	    cmd_data_len == 0U) {
+		data->platform_type = cmd[4];
+		*payload_len = 0U;
+		return true;
+	}
+
+	if (cmd[1] == 0x80U && cmd[2] == 0x3EU && cmd[3] == 0x01U && cmd[4] == 0x00U &&
+	    cmd_data_len == 0U && payload_size >= 1U) {
+		payload[0] = data->platform_type;
+		*payload_len = 1U;
+		return true;
+	}
+
+	if (cmd[1] == 0x80U && cmd[2] == 0x2CU && cmd[3] == 0x00U && cmd[4] == 0x00U &&
+	    cmd_data_len == 0U) {
+		*payload_len = 0U;
+		return true;
+	}
+
+	if (cmd[1] == 0x80U && cmd[2] == 0x38U && (cmd[3] == 0x00U || cmd[3] == 0x01U) &&
+	    cmd[4] == 0x00U) {
+		*payload_len = sc1777y_emul_set_cert_request_payload(&cmd[7], cmd_data_len, payload,
+							       payload_size);
+		return true;
+	}
+
+	if (cmd[1] == 0x80U && cmd[2] == 0x3AU && cmd[3] == 0x01U && cmd[4] == 0x00U &&
+	    cmd_data_len == 0U) {
+		*payload_len = sc1777y_emul_fill_incrementing(payload, payload_size,
+							      SC1777Y_SESSION_RANDOM_LEN, 0xC0);
+		return true;
+	}
+
+	if (cmd[1] == 0x80U && cmd[2] == 0x32U && (cmd[3] == 0x00U || cmd[3] == 0x01U) &&
+	    cmd[4] == 0x00U && cmd_data_len > 0U) {
+		*payload_len = sc1777y_emul_fill_incrementing(payload, payload_size,
+							      SC1777Y_HASH_LEN, 0xD0);
+		return true;
+	}
+
+	if (cmd[1] == 0x80U && cmd[2] == 0x34U && cmd[3] == 0x00U && cmd[4] == 0x00U &&
+	    cmd_data_len == SC1777Y_HASH_LEN) {
+		*payload_len = sc1777y_emul_fill_incrementing(payload, payload_size,
+							      SC1777Y_SIGNATURE_LEN, 0xE0);
+		return true;
+	}
+
+	if (cmd[1] == 0x80U && cmd[2] == 0x36U && cmd[3] == 0x00U && cmd[4] == 0x01U &&
+	    cmd_data_len == SC1777Y_HASH_LEN + SC1777Y_SIGNATURE_LEN) {
+		*payload_len = 0U;
+		return true;
+	}
+
+	if (cmd[1] == 0x80U && cmd[2] == 0x2AU && cmd[3] == 0x01U && cmd[4] == 0x04U &&
+	    cmd_data_len == SC1777Y_AUTH_FACTOR_LEN) {
+		*payload_len = sc1777y_emul_fill_incrementing(payload, payload_size,
+							      SC1777Y_AUTH_RESPONSE_LEN, 0x70);
+		return true;
+	}
+
+	if (cmd[1] == 0x80U && cmd[2] == 0x3CU && cmd[3] == 0x00U && cmd[4] == 0x00U &&
+	    cmd_data_len == SC1777Y_SESSION_RANDOM_LEN) {
+		*payload_len = sc1777y_emul_fill_incrementing(payload, payload_size,
+							      SC1777Y_SESSION_DKHASH_LEN, 0x90);
+		return true;
+	}
+
+	if (cmd[1] == 0x80U && cmd[2] == 0x28U && (cmd[3] == 0x80U || cmd[3] == 0x81U) &&
+	    cmd[4] == 0x00U && cmd_data_len >= SC1777Y_BLOCK16_MIN_LEN &&
+	    (cmd_data_len % SC1777Y_BLOCK16_MIN_LEN) == 0U) {
+		*payload_len = sc1777y_emul_xor_payload_with_mask(&cmd[7], cmd_data_len, payload,
+								  payload_size, 0xA5U);
 		return true;
 	}
 

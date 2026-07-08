@@ -26,6 +26,7 @@ struct sc1777y_config {
 #define SC1777Y_SENSOR_BLOCK_LEN 8U
 #define SC1777Y_SENSOR_ID_LEN 8U
 #define SC1777Y_UPDATE_AUTH_ENCRYPTED_LEN 8U
+#define SC1777Y_PLATFORM_TYPE_LEN 1U
 
 static int sc1777y_command_expect_len(const struct device *dev, const struct sc1777y_command *cmd,
 				      uint8_t *out, size_t len)
@@ -90,6 +91,59 @@ static int sc1777y_sensor_data_p2(enum sc1777y_sensor_type type, uint8_t *p2)
 	}
 
 	return -EINVAL;
+}
+
+static int sc1777y_validate_session_blocks(const uint8_t *in, size_t in_len)
+{
+	if (in == NULL || in_len < SC1777Y_BLOCK16_MIN_LEN || in_len > SC1777Y_MAX_DATA_LEN ||
+	    (in_len % SC1777Y_BLOCK16_MIN_LEN) != 0U) {
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int sc1777y_session_crypto(const struct device *dev, uint8_t p1, const uint8_t *in,
+				  size_t in_len, uint8_t *out, size_t out_size,
+				  size_t *out_len)
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0x28,
+		.p1 = p1,
+		.p2 = 0x00,
+		.data = in,
+		.data_len = in_len,
+	};
+	size_t actual_out_len;
+	int ret;
+
+	if (out_len == NULL) {
+		return -EINVAL;
+	}
+
+	ret = sc1777y_validate_session_blocks(in, in_len);
+	if (ret != 0) {
+		return ret;
+	}
+
+	if (out_size < in_len) {
+		*out_len = in_len;
+		return -ENOMEM;
+	}
+
+	ret = sc1777y_command(dev, &cmd, out, out_size, &actual_out_len, NULL);
+	if (ret != 0) {
+		return ret;
+	}
+
+	if (actual_out_len != in_len) {
+		return -EIO;
+	}
+
+	*out_len = actual_out_len;
+
+	return 0;
 }
 
 static int sc1777y_validate_sensor_blocks(const uint8_t *in, size_t in_len, size_t max_len)
@@ -650,6 +704,294 @@ int sc1777y_get_serial(const struct device *dev, uint8_t serial[SC1777Y_SERIAL_L
 	}
 
 	return sc1777y_command_expect_len(dev, &cmd, serial, SC1777Y_SERIAL_LEN);
+}
+
+int sc1777y_import_platform_public_key(const struct device *dev,
+				       const uint8_t key64[SC1777Y_PLATFORM_PUBLIC_KEY_LEN])
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0x30,
+		.p1 = 0x01,
+		.p2 = 0x01,
+		.data = key64,
+		.data_len = SC1777Y_PLATFORM_PUBLIC_KEY_LEN,
+	};
+
+	if (key64 == NULL) {
+		return -EINVAL;
+	}
+
+	return sc1777y_command_expect_empty(dev, &cmd);
+}
+
+int sc1777y_import_ak(const struct device *dev, const uint8_t ak16[SC1777Y_AK_LEN])
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0x26,
+		.p1 = 0x02,
+		.p2 = 0x00,
+		.data = ak16,
+		.data_len = SC1777Y_AK_LEN,
+	};
+
+	if (ak16 == NULL) {
+		return -EINVAL;
+	}
+
+	return sc1777y_command_expect_empty(dev, &cmd);
+}
+
+int sc1777y_import_iv(const struct device *dev, const uint8_t iv16[SC1777Y_IV_LEN])
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0x26,
+		.p1 = 0x04,
+		.p2 = 0x00,
+		.data = iv16,
+		.data_len = SC1777Y_IV_LEN,
+	};
+
+	if (iv16 == NULL) {
+		return -EINVAL;
+	}
+
+	return sc1777y_command_expect_empty(dev, &cmd);
+}
+
+int sc1777y_set_platform_type(const struct device *dev, enum sc1777y_platform_type type)
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0x3E,
+		.p1 = 0x00,
+		.p2 = (uint8_t)type,
+	};
+
+	if (type != SC1777Y_PLATFORM_NANRUI && type != SC1777Y_PLATFORM_WANGAN) {
+		return -EINVAL;
+	}
+
+	return sc1777y_command_expect_empty(dev, &cmd);
+}
+
+int sc1777y_get_platform_type(const struct device *dev, enum sc1777y_platform_type *type)
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0x3E,
+		.p1 = 0x01,
+		.p2 = 0x00,
+	};
+	uint8_t raw_type;
+	int ret;
+
+	if (type == NULL) {
+		return -EINVAL;
+	}
+
+	ret = sc1777y_command_expect_len(dev, &cmd, &raw_type, SC1777Y_PLATFORM_TYPE_LEN);
+	if (ret != 0) {
+		return ret;
+	}
+
+	if (raw_type != SC1777Y_PLATFORM_NANRUI && raw_type != SC1777Y_PLATFORM_WANGAN) {
+		return -EIO;
+	}
+
+	*type = (enum sc1777y_platform_type)raw_type;
+
+	return 0;
+}
+
+int sc1777y_generate_sm2_keypair(const struct device *dev)
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0x2C,
+		.p1 = 0x00,
+		.p2 = 0x00,
+	};
+
+	return sc1777y_command_expect_empty(dev, &cmd);
+}
+
+int sc1777y_generate_cert_request(const struct device *dev,
+				  enum sc1777y_cert_request_format format,
+				  const uint8_t *subject, size_t subject_len,
+				  uint8_t *out, size_t out_size, size_t *out_len)
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0x38,
+		.p1 = (uint8_t)format,
+		.p2 = 0x00,
+		.data = subject,
+		.data_len = subject_len,
+	};
+	uint8_t response[SC1777Y_MAX_DATA_LEN];
+	size_t actual_out_len;
+	int ret;
+
+	if (out_len == NULL || (subject_len > 0U && subject == NULL) ||
+	    (out_size > 0U && out == NULL)) {
+		return -EINVAL;
+	}
+
+	if (format != SC1777Y_CERT_REQUEST_FORMAT_1 && format != SC1777Y_CERT_REQUEST_FORMAT_2) {
+		return -EINVAL;
+	}
+
+	ret = sc1777y_command(dev, &cmd, response, sizeof(response), &actual_out_len, NULL);
+	if (ret != 0) {
+		return ret;
+	}
+
+	*out_len = actual_out_len;
+	if (out_size < actual_out_len) {
+		return -ENOMEM;
+	}
+
+	if (actual_out_len > 0U) {
+		memcpy(out, response, actual_out_len);
+	}
+
+	return 0;
+}
+
+int sc1777y_session_begin(const struct device *dev, uint8_t en_r1[SC1777Y_SESSION_RANDOM_LEN])
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0x3A,
+		.p1 = 0x01,
+		.p2 = 0x00,
+	};
+
+	if (en_r1 == NULL) {
+		return -EINVAL;
+	}
+
+	return sc1777y_command_expect_len(dev, &cmd, en_r1, SC1777Y_SESSION_RANDOM_LEN);
+}
+
+int sc1777y_hash(const struct device *dev, enum sc1777y_hash_target target,
+		 const uint8_t *data, size_t len, uint8_t hash32[SC1777Y_HASH_LEN])
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0x32,
+		.p1 = (uint8_t)target,
+		.p2 = 0x00,
+		.data = data,
+		.data_len = len,
+	};
+
+	if (hash32 == NULL || data == NULL || len == 0U || len > SC1777Y_MAX_DATA_LEN) {
+		return -EINVAL;
+	}
+
+	if (target != SC1777Y_HASH_REQUEST && target != SC1777Y_HASH_RESPONSE) {
+		return -EINVAL;
+	}
+
+	return sc1777y_command_expect_len(dev, &cmd, hash32, SC1777Y_HASH_LEN);
+}
+
+int sc1777y_sign_hash(const struct device *dev, const uint8_t hash32[SC1777Y_HASH_LEN],
+		      uint8_t signature64[SC1777Y_SIGNATURE_LEN])
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0x34,
+		.p1 = 0x00,
+		.p2 = 0x00,
+		.data = hash32,
+		.data_len = SC1777Y_HASH_LEN,
+	};
+
+	if (hash32 == NULL || signature64 == NULL) {
+		return -EINVAL;
+	}
+
+	return sc1777y_command_expect_len(dev, &cmd, signature64, SC1777Y_SIGNATURE_LEN);
+}
+
+int sc1777y_verify_signature(const struct device *dev, const uint8_t hash32[SC1777Y_HASH_LEN],
+			     const uint8_t signature64[SC1777Y_SIGNATURE_LEN])
+{
+	uint8_t payload[SC1777Y_HASH_LEN + SC1777Y_SIGNATURE_LEN];
+	struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0x36,
+		.p1 = 0x00,
+		.p2 = 0x01,
+		.data = payload,
+		.data_len = sizeof(payload),
+	};
+
+	if (hash32 == NULL || signature64 == NULL) {
+		return -EINVAL;
+	}
+
+	memcpy(payload, hash32, SC1777Y_HASH_LEN);
+	memcpy(&payload[SC1777Y_HASH_LEN], signature64, SC1777Y_SIGNATURE_LEN);
+
+	return sc1777y_command_expect_empty(dev, &cmd);
+}
+
+int sc1777y_generate_auth_response(const struct device *dev,
+				   const uint8_t factor32[SC1777Y_AUTH_FACTOR_LEN],
+				   uint8_t response146[SC1777Y_AUTH_RESPONSE_LEN])
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0x2A,
+		.p1 = 0x01,
+		.p2 = 0x04,
+		.data = factor32,
+		.data_len = SC1777Y_AUTH_FACTOR_LEN,
+	};
+
+	if (factor32 == NULL || response146 == NULL) {
+		return -EINVAL;
+	}
+
+	return sc1777y_command_expect_len(dev, &cmd, response146, SC1777Y_AUTH_RESPONSE_LEN);
+}
+
+int sc1777y_session_confirm(const struct device *dev,
+			    const uint8_t en_r2_128[SC1777Y_SESSION_RANDOM_LEN],
+			    uint8_t dkhash32[SC1777Y_SESSION_DKHASH_LEN])
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0x3C,
+		.p1 = 0x00,
+		.p2 = 0x00,
+		.data = en_r2_128,
+		.data_len = SC1777Y_SESSION_RANDOM_LEN,
+	};
+
+	if (en_r2_128 == NULL || dkhash32 == NULL) {
+		return -EINVAL;
+	}
+
+	return sc1777y_command_expect_len(dev, &cmd, dkhash32, SC1777Y_SESSION_DKHASH_LEN);
+}
+
+int sc1777y_session_encrypt(const struct device *dev, const uint8_t *in, size_t in_len,
+			    uint8_t *out, size_t out_size, size_t *out_len)
+{
+	return sc1777y_session_crypto(dev, 0x80, in, in_len, out, out_size, out_len);
+}
+
+int sc1777y_session_decrypt(const struct device *dev, const uint8_t *in, size_t in_len,
+			    uint8_t *out, size_t out_size, size_t *out_len)
+{
+	return sc1777y_session_crypto(dev, 0x81, in, in_len, out, out_size, out_len);
 }
 
 static int sc1777y_init(const struct device *dev)
