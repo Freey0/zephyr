@@ -266,67 +266,68 @@ static size_t sc1777y_emul_set_serial_payload(uint8_t *payload, size_t payload_s
 	return sizeof(serial);
 }
 
-static size_t sc1777y_emul_get_success_payload(const struct sc1777y_emul_data *data, uint8_t *payload,
-					       size_t payload_size)
+static bool sc1777y_emul_prepare_success_payload(const struct sc1777y_emul_data *data, uint8_t *payload,
+						 size_t payload_size, size_t *payload_len)
 {
-	static const uint8_t fallback_payload[] = {0xDE, 0xAD, 0xBE, 0xEF};
 	const uint8_t *cmd = data->last_command;
 	size_t cmd_data_len;
 
-	if (!sc1777y_emul_is_valid_command(data)) {
-		return 0U;
+	if (!sc1777y_emul_is_valid_command(data) || payload_len == NULL) {
+		return false;
 	}
 
 	cmd_data_len = data->last_command_len - 8U;
 
 	if (cmd[1] == 0x00U && cmd[2] == 0x84U && cmd[3] == 0x00U) {
-		return sc1777y_emul_set_random_payload(payload, payload_size, cmd[4]);
+		*payload_len = sc1777y_emul_set_random_payload(payload, payload_size, cmd[4]);
+		return true;
 	}
 
 	if (cmd[1] == 0x80U && cmd[2] == 0xCBU && cmd[4] == 0x00U &&
 	    (cmd[3] == 0x80U || cmd[3] == 0x81U)) {
-		return sc1777y_emul_set_identity_payload(payload, payload_size);
+		*payload_len = sc1777y_emul_set_identity_payload(payload, payload_size);
+		return true;
 	}
 
 	if (cmd[1] == 0x80U && cmd[2] == 0xCBU && cmd[3] == 0x00U && cmd[4] == 0x00U) {
-		return sc1777y_emul_set_version_payload(payload, payload_size);
+		*payload_len = sc1777y_emul_set_version_payload(payload, payload_size);
+		return true;
 	}
 
 	if (cmd[1] == 0x00U && cmd[2] == 0xB0U && cmd[3] == 0x99U && cmd[4] == 0x00U &&
 	    cmd_data_len == 2U && cmd[7] == 0x00U && cmd[8] == SC1777Y_SERIAL_LEN) {
-		return sc1777y_emul_set_serial_payload(payload, payload_size);
+		*payload_len = sc1777y_emul_set_serial_payload(payload, payload_size);
+		return true;
 	}
 
-	if (payload_size < sizeof(fallback_payload)) {
-		return 0U;
-	}
-
-	memcpy(payload, fallback_payload, sizeof(fallback_payload));
-
-	return sizeof(fallback_payload);
+	return false;
 }
 
 static void sc1777y_emul_prepare_response(struct sc1777y_emul_data *data)
 {
 	uint8_t sw1;
 	uint8_t sw2;
-	size_t payload_len;
+	size_t payload_len = 0U;
 
 	if (data->next_status_valid) {
 		sw1 = data->next_status_sw1;
 		sw2 = data->next_status_sw2;
 		data->next_status_valid = false;
-	} else if (sc1777y_emul_is_valid_command(data)) {
-		sw1 = 0x90U;
-		sw2 = 0x00U;
 	} else {
-		sw1 = 0x6AU;
-		sw2 = 0x90U;
+		if (!sc1777y_emul_is_valid_command(data)) {
+			sw1 = 0x6AU;
+			sw2 = 0x90U;
+		} else if (sc1777y_emul_prepare_success_payload(data, &data->response[4],
+							       sizeof(data->response) - 5U,
+							       &payload_len)) {
+			sw1 = 0x90U;
+			sw2 = 0x00U;
+		} else {
+			sw1 = 0x6DU;
+			sw2 = 0x00U;
+		}
 	}
 
-	payload_len = (sw1 == 0x90U && sw2 == 0x00U) ?
-		sc1777y_emul_get_success_payload(data, &data->response[4], sizeof(data->response) - 5U) :
-		0U;
 	data->response[0] = sw1;
 	data->response[1] = sw2;
 	data->response[2] = (uint8_t)(payload_len >> 8);

@@ -47,6 +47,12 @@ ZTEST_F(sc1777y, test_get_sensor_identity_sends_80cb80000000)
 	zassert_equal(sizeof(expected_frame), frame_len);
 }
 
+ZTEST_F(sc1777y, test_get_sensor_identity_rejects_null_output)
+{
+	zassert_equal(-EINVAL, sc1777y_get_sensor_identity(fixture->dev, NULL));
+	zassert_equal(0, sc1777y_emul_get_command_count(fixture->emul));
+}
+
 ZTEST_F(sc1777y, test_get_update_identity_sends_80cb81000000)
 {
 	struct sc1777y_identity identity;
@@ -63,6 +69,12 @@ ZTEST_F(sc1777y, test_get_update_identity_sends_80cb81000000)
 	zassert_ok(sc1777y_emul_get_last_command(fixture->emul, frame, sizeof(frame), &frame_len));
 	zassert_mem_equal(expected_frame, frame, sizeof(expected_frame));
 	zassert_equal(sizeof(expected_frame), frame_len);
+}
+
+ZTEST_F(sc1777y, test_get_update_identity_rejects_null_output)
+{
+	zassert_equal(-EINVAL, sc1777y_get_update_identity(fixture->dev, NULL));
+	zassert_equal(0, sc1777y_emul_get_command_count(fixture->emul));
 }
 
 ZTEST_F(sc1777y, test_get_version_info_sends_80cb00000000)
@@ -84,6 +96,12 @@ ZTEST_F(sc1777y, test_get_version_info_sends_80cb00000000)
 	zassert_equal(sizeof(expected_frame), frame_len);
 }
 
+ZTEST_F(sc1777y, test_get_version_info_rejects_null_output)
+{
+	zassert_equal(-EINVAL, sc1777y_get_version_info(fixture->dev, NULL));
+	zassert_equal(0, sc1777y_emul_get_command_count(fixture->emul));
+}
+
 ZTEST_F(sc1777y, test_get_serial_sends_00b0990000020008)
 {
 	uint8_t serial[SC1777Y_SERIAL_LEN];
@@ -98,4 +116,10 @@ ZTEST_F(sc1777y, test_get_serial_sends_00b0990000020008)
 	zassert_ok(sc1777y_emul_get_last_command(fixture->emul, frame, sizeof(frame), &frame_len));
 	zassert_mem_equal(expected_frame, frame, sizeof(expected_frame));
 	zassert_equal(sizeof(expected_frame), frame_len);
+}
+
+ZTEST_F(sc1777y, test_get_serial_rejects_null_output)
+{
+	zassert_equal(-EINVAL, sc1777y_get_serial(fixture->dev, NULL));
+	zassert_equal(0, sc1777y_emul_get_command_count(fixture->emul));
 }

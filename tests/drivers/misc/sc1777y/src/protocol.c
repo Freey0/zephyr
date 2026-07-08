@@ -37,11 +37,15 @@ ZTEST_F(sc1777y, test_raw_command_records_full_sc1777y_frame)
 	};
 	uint8_t out[8];
 	size_t out_len;
+	struct sc1777y_status status;
 	uint8_t frame[16];
 	size_t frame_len;
 	const uint8_t expected[] = {0x55, 0x12, 0x34, 0x56, 0x78, 0x00, 0x02, 0xAA, 0x55, 0x0A};
 
-	zassert_ok(sc1777y_command(fixture->dev, &cmd, out, sizeof(out), &out_len, NULL));
+	zassert_equal(-ENOTSUP,
+		      sc1777y_command(fixture->dev, &cmd, out, sizeof(out), &out_len, &status));
+	zassert_equal(0x6D, status.sw1);
+	zassert_equal(0x00, status.sw2);
 	zassert_ok(sc1777y_emul_get_last_command(fixture->emul, frame, sizeof(frame), &frame_len));
 	zassert_mem_equal(expected, frame, sizeof(expected));
 	zassert_equal(sizeof(expected), frame_len);
@@ -68,8 +72,9 @@ ZTEST_F(sc1777y, test_raw_command_accepts_max_payload_and_records_boundary_frame
 		payload[i] = (uint8_t)i;
 	}
 
-	zassert_ok(sc1777y_command(fixture->dev, &cmd, out, sizeof(out), &out_len, &status));
-	zassert_equal(0x90, status.sw1);
+	zassert_equal(-ENOTSUP,
+		      sc1777y_command(fixture->dev, &cmd, out, sizeof(out), &out_len, &status));
+	zassert_equal(0x6D, status.sw1);
 	zassert_equal(0x00, status.sw2);
 	zassert_ok(sc1777y_emul_get_last_command(fixture->emul, frame, sizeof(frame), &frame_len));
 	zassert_equal(TEST_MAX_RAW_PAYLOAD_LEN + 8U, frame_len);
@@ -153,4 +158,23 @@ ZTEST_F(sc1777y, test_command_returns_access_error_for_auth_failure)
 		      sc1777y_command(fixture->dev, &cmd, out, sizeof(out), &out_len, &status));
 	zassert_equal(0x63, status.sw1);
 	zassert_equal(0x00, status.sw2);
+}
+
+ZTEST_F(sc1777y, test_unsupported_byte_valid_command_returns_not_supported_status)
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x12,
+		.ins = 0x34,
+		.p1 = 0x56,
+		.p2 = 0x78,
+	};
+	uint8_t out[4];
+	size_t out_len;
+	struct sc1777y_status status;
+
+	zassert_equal(-ENOTSUP,
+		      sc1777y_command(fixture->dev, &cmd, out, sizeof(out), &out_len, &status));
+	zassert_equal(0x6D, status.sw1);
+	zassert_equal(0x00, status.sw2);
+	zassert_equal(1, sc1777y_emul_get_command_count(fixture->emul));
 }
