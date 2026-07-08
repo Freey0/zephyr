@@ -102,9 +102,18 @@ static int sc1777y_sensor_crypto(const struct device *dev, uint8_t ins, uint8_t 
 	size_t actual_out_len;
 	int ret;
 
+	if (out_len == NULL) {
+		return -EINVAL;
+	}
+
 	ret = sc1777y_validate_sensor_blocks(in, in_len, SC1777Y_MAX_DATA_LEN);
 	if (ret != 0) {
 		return ret;
+	}
+
+	if (out_size < in_len) {
+		*out_len = in_len;
+		return -ENOMEM;
 	}
 
 	ret = sc1777y_command(dev, &cmd, out, out_size, &actual_out_len, NULL);
@@ -137,6 +146,10 @@ static int sc1777y_terminal_sensor_crypto(const struct device *dev, uint8_t ins,
 	size_t actual_out_len;
 	int ret;
 
+	if (out_len == NULL) {
+		return -EINVAL;
+	}
+
 	if (sensor_id == NULL) {
 		return -EINVAL;
 	}
@@ -150,6 +163,11 @@ static int sc1777y_terminal_sensor_crypto(const struct device *dev, uint8_t ins,
 					     SC1777Y_MAX_DATA_LEN - SC1777Y_SENSOR_ID_LEN);
 	if (ret != 0) {
 		return ret;
+	}
+
+	if (out_size < in_len) {
+		*out_len = in_len;
+		return -ENOMEM;
 	}
 
 	memcpy(payload, sensor_id, SC1777Y_SENSOR_ID_LEN);
