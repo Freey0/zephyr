@@ -847,7 +847,7 @@ int sc1777y_generate_cert_request(const struct device *dev,
 		.data = subject,
 		.data_len = subject_len,
 	};
-	size_t actual_out_len;
+	size_t actual_out_len = 0U;
 	int ret;
 
 	if (out_len == NULL || (subject_len > 0U && subject == NULL) ||

@@ -480,6 +480,20 @@ ZTEST_F(sc1777y, test_generate_cert_request_rejects_invalid_arguments_before_spi
 	zassert_equal(0, sc1777y_emul_get_command_count(fixture->emul));
 }
 
+ZTEST_F(sc1777y, test_generate_cert_request_clears_out_len_on_command_error)
+{
+	const uint8_t subject[] = {'C', 'N', '='};
+	uint8_t out[8];
+	size_t out_len = 123U;
+
+	zassert_equal(-EINVAL, sc1777y_generate_cert_request(NULL,
+							     SC1777Y_CERT_REQUEST_FORMAT_1,
+							     subject, sizeof(subject), out,
+							     sizeof(out), &out_len));
+	zassert_equal(0U, out_len);
+	zassert_equal(0, sc1777y_emul_get_command_count(fixture->emul));
+}
+
 ZTEST_F(sc1777y, test_hash_rejects_invalid_arguments_before_spi)
 {
 	uint8_t hash[SC1777Y_HASH_LEN];
