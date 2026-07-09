@@ -1,5 +1,5 @@
 sample:
-  name: SC1777Y security chip sample
+  name: SC1777Y driver flow guide
 tests:
   sample.drivers.sc1777y:
     platform_allow:

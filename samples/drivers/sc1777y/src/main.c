@@ -507,7 +507,8 @@ static int run_5_3_3_session_negotiation(const struct device *dev)
 	printf("  Terminal -> Platform: RequestMsg { DATA, RequestSign[64] }\n");
 	printf("    DATA { Type, SubType, Len, Ver, SN, SIM, ID, Cert1, EnR1[128] }\n");
 	printf("    Key driver data: EnR1[128], RequestHash[32], RequestSign[64]\n");
-	printf("  Platform -> Terminal: ResponseMsg { Type, SubType, Len, SN, AuthFactor[32], EnR2[128], ResponseSign[64] }\n");
+	printf("  Platform -> Terminal: ResponseMsg { Type, SubType, Len, SN, "
+	       "AuthFactor[32], EnR2[128], ResponseSign[64] }\n");
 	printf("    Key driver data: AuthFactor[32], EnR2[128], ResponseHash[32], ResponseSign[64]\n");
 	printf("  Terminal -> Platform: ConfirmMsg { Type, SubType, Len, SN, AuthResult, DKHash[32] }\n");
 	printf("    Key driver data: AuthResult, DKHash[32]\n");
@@ -586,7 +587,8 @@ static int run_5_3_4_session_key_encryption(const struct device *dev)
 	printf("[5.3.4] Session-key encryption\n");
 	printf("  Prerequisite: session negotiation has succeeded\n");
 	printf("  Prerequisite: plaintext length satisfies the 16-byte block requirement\n");
-	printf("  Terminal -> Platform: RequestMsg { Type, SubType, Len, IV[16], ResponseData[ciphertext] }\n");
+	printf("  Terminal -> Platform: RequestMsg { Type, SubType, Len, "
+	       "IV[16], ResponseData[ciphertext] }\n");
 	printf("    Key driver data: IV[16], DATA[16], ResponseData[ciphertext]\n");
 
 	rc = sc1777y_get_random(dev, iv, sizeof(iv));
@@ -642,7 +644,8 @@ static int run_5_3_5_session_key_decryption(const struct device *dev)
 	printf("[5.3.5] Session-key decryption\n");
 	printf("  Prerequisite: session negotiation has succeeded\n");
 	printf("  Prerequisite: Terminal parsed IV[16] and RequestData[ciphertext]\n");
-	printf("  Platform -> Terminal: RequestMsg { Type, SubType, Len, IV[16], RequestData[ciphertext] }\n");
+	printf("  Platform -> Terminal: RequestMsg { Type, SubType, Len, "
+	       "IV[16], RequestData[ciphertext] }\n");
 	printf("    Key driver data: IV[16], RequestData[ciphertext], ResponseData[plaintext]\n");
 
 	fill_example_bytes(iv, sizeof(iv), 0xA0);
