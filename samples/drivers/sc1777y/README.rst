@@ -36,7 +36,7 @@ Devicetree overlay 会提供 ``sc1777y-0`` alias：
 构建和运行
 **********
 
-在 Zephyr 工作区中运行：
+如果本分支已经合入当前 Zephyr checkout，可以在 Zephyr 工作区中运行：
 
 .. zephyr-app-commands::
    :zephyr-app: samples/drivers/sc1777y
@@ -44,11 +44,16 @@ Devicetree overlay 会提供 ``sc1777y-0`` alias：
    :goals: build run
    :compact:
 
-也可以用 twister 运行样例：
+如果在 ``.worktrees/sc1777y-driver`` 这样的 git worktree 中验证本分支，
+需要让 ``ZEPHYR_BASE`` 指向当前 worktree。否则 ``west`` 会按原工作区
+解析 Zephyr base，可能读不到本分支新增的 Devicetree vendor prefix 和
+binding。
+
+在当前 worktree 中运行：
 
 .. code-block:: console
 
-   west twister -T samples/drivers/sc1777y -p native_sim --inline-logs
+   ZEPHYR_BASE=$PWD west twister -T samples/drivers/sc1777y -p native_sim --inline-logs
 
 期望输出以每个流程的标题开始，并以如下内容结束：
 
