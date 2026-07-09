@@ -5,11 +5,11 @@ config SC1777Y
 	default y if DT_HAS_SENSCOMM_SC1777Y_ENABLED
 	depends on SPI
 	help
-	  Enable the SC1777Y security chip driver skeleton.
+	  Enable the SC1777Y SPI driver.
 
 config SC1777Y_EMUL
 	bool "SC1777Y emulator"
 	default y if DT_HAS_SENSCOMM_SC1777Y_ENABLED
 	depends on EMUL && SPI_EMUL && SC1777Y
 	help
-	  Enable the SC1777Y SPI emulator skeleton.
+	  Enable the SC1777Y SPI emulator for tests and samples.

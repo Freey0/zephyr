@@ -14,6 +14,13 @@ struct sc1777y_config {
 	struct spi_dt_spec bus;
 };
 
+struct sc1777y_data {
+	struct k_mutex lock;
+	uint8_t frame[SC1777Y_MAX_FRAME_LEN];
+	uint8_t response[SC1777Y_MAX_FRAME_LEN];
+	uint8_t scratch[SC1777Y_MAX_DATA_LEN];
+};
+
 #define SC1777Y_CMD_HEADER 0x55
 #define SC1777Y_READY_BYTE 0x55
 #define SC1777Y_MAX_RETRIES 3
@@ -27,6 +34,10 @@ struct sc1777y_config {
 #define SC1777Y_SENSOR_ID_LEN 8U
 #define SC1777Y_UPDATE_AUTH_ENCRYPTED_LEN 8U
 #define SC1777Y_PLATFORM_TYPE_LEN 1U
+
+static int sc1777y_command_locked(const struct device *dev, const struct sc1777y_command *cmd,
+				  uint8_t *out, size_t out_size, size_t *out_len,
+				  struct sc1777y_status *status);
 
 static int sc1777y_command_expect_len(const struct device *dev, const struct sc1777y_command *cmd,
 				      uint8_t *out, size_t len)
@@ -204,8 +215,8 @@ static int sc1777y_terminal_sensor_crypto(const struct device *dev, uint8_t ins,
 					  const uint8_t *in, size_t in_len, uint8_t *out,
 					  size_t out_size, size_t *out_len)
 {
+	struct sc1777y_data *data;
 	uint8_t p2;
-	uint8_t payload[SC1777Y_MAX_DATA_LEN];
 	struct sc1777y_command cmd = {
 		.cla = 0x80,
 		.ins = ins,
@@ -214,7 +225,7 @@ static int sc1777y_terminal_sensor_crypto(const struct device *dev, uint8_t ins,
 	size_t actual_out_len;
 	int ret;
 
-	if (out_len == NULL) {
+	if (dev == NULL || out_len == NULL) {
 		return -EINVAL;
 	}
 
@@ -238,14 +249,18 @@ static int sc1777y_terminal_sensor_crypto(const struct device *dev, uint8_t ins,
 		return -ENOMEM;
 	}
 
-	memcpy(payload, sensor_id, SC1777Y_SENSOR_ID_LEN);
-	memcpy(&payload[SC1777Y_SENSOR_ID_LEN], in, in_len);
+	data = dev->data;
+	k_mutex_lock(&data->lock, K_FOREVER);
+
+	memcpy(data->scratch, sensor_id, SC1777Y_SENSOR_ID_LEN);
+	memcpy(&data->scratch[SC1777Y_SENSOR_ID_LEN], in, in_len);
 
 	cmd.p2 = p2;
-	cmd.data = payload;
+	cmd.data = data->scratch;
 	cmd.data_len = SC1777Y_SENSOR_ID_LEN + in_len;
 
-	ret = sc1777y_command(dev, &cmd, out, out_size, &actual_out_len, NULL);
+	ret = sc1777y_command_locked(dev, &cmd, out, out_size, &actual_out_len, NULL);
+	k_mutex_unlock(&data->lock);
 	if (ret != 0) {
 		return ret;
 	}
@@ -377,8 +392,9 @@ static int sc1777y_read_bytes(const struct spi_dt_spec *bus, uint8_t *buf, size_
 	return spi_read_dt(bus, &rx_bufs);
 }
 
-static int sc1777y_read_response(const struct spi_dt_spec *bus, uint8_t *response, size_t response_size,
-				 size_t *response_len, struct sc1777y_status *status)
+static int sc1777y_read_response(const struct spi_dt_spec *bus, uint8_t *response,
+				 size_t response_size, size_t *response_len,
+				 struct sc1777y_status *status)
 {
 	uint16_t payload_len;
 	size_t total_len;
@@ -423,12 +439,12 @@ static int sc1777y_read_response(const struct spi_dt_spec *bus, uint8_t *respons
 	return 0;
 }
 
-int sc1777y_command(const struct device *dev, const struct sc1777y_command *cmd, uint8_t *out,
-		    size_t out_size, size_t *out_len, struct sc1777y_status *status)
+static int sc1777y_command_locked(const struct device *dev, const struct sc1777y_command *cmd,
+				  uint8_t *out, size_t out_size, size_t *out_len,
+				  struct sc1777y_status *status)
 {
 	const struct sc1777y_config *cfg;
-	uint8_t frame[SC1777Y_MAX_FRAME_LEN];
-	uint8_t response[SC1777Y_MAX_FRAME_LEN];
+	struct sc1777y_data *data;
 	size_t frame_len;
 	size_t response_len;
 	size_t payload_len;
@@ -439,7 +455,8 @@ int sc1777y_command(const struct device *dev, const struct sc1777y_command *cmd,
 		return -EINVAL;
 	}
 
-	ret = sc1777y_build_frame(cmd, frame, sizeof(frame), &frame_len);
+	data = dev->data;
+	ret = sc1777y_build_frame(cmd, data->frame, sizeof(data->frame), &frame_len);
 	if (ret != 0) {
 		return ret;
 	}
@@ -448,7 +465,7 @@ int sc1777y_command(const struct device *dev, const struct sc1777y_command *cmd,
 	*out_len = 0U;
 
 	for (int attempt = 0; attempt < SC1777Y_MAX_RETRIES; attempt++) {
-		ret = sc1777y_write_frame(&cfg->bus, frame, frame_len);
+		ret = sc1777y_write_frame(&cfg->bus, data->frame, frame_len);
 		if (ret != 0) {
 			return ret;
 		}
@@ -458,8 +475,8 @@ int sc1777y_command(const struct device *dev, const struct sc1777y_command *cmd,
 			return ret;
 		}
 
-		ret = sc1777y_read_response(&cfg->bus, response, sizeof(response), &response_len,
-					    &local_status);
+		ret = sc1777y_read_response(&cfg->bus, data->response, sizeof(data->response),
+					    &response_len, &local_status);
 		if (ret == -EBADMSG) {
 			continue;
 		}
@@ -475,7 +492,8 @@ int sc1777y_command(const struct device *dev, const struct sc1777y_command *cmd,
 				return -ENOMEM;
 			}
 			if (payload_len > 0U) {
-				memcpy(out, &response[SC1777Y_RESPONSE_HEADER_LEN], payload_len);
+				memcpy(out, &data->response[SC1777Y_RESPONSE_HEADER_LEN],
+				       payload_len);
 			}
 			*out_len = payload_len;
 			if (status != NULL) {
@@ -500,6 +518,24 @@ int sc1777y_command(const struct device *dev, const struct sc1777y_command *cmd,
 	}
 
 	return -EIO;
+}
+
+int sc1777y_command(const struct device *dev, const struct sc1777y_command *cmd, uint8_t *out,
+		    size_t out_size, size_t *out_len, struct sc1777y_status *status)
+{
+	struct sc1777y_data *data;
+	int ret;
+
+	if (dev == NULL || out_len == NULL || (out_size > 0U && out == NULL)) {
+		return -EINVAL;
+	}
+
+	data = dev->data;
+	k_mutex_lock(&data->lock, K_FOREVER);
+	ret = sc1777y_command_locked(dev, cmd, out, out_size, out_len, status);
+	k_mutex_unlock(&data->lock);
+
+	return ret;
 }
 
 /***** Sensor user operations *****/
@@ -811,7 +847,6 @@ int sc1777y_generate_cert_request(const struct device *dev,
 		.data = subject,
 		.data_len = subject_len,
 	};
-	uint8_t response[SC1777Y_MAX_DATA_LEN];
 	size_t actual_out_len;
 	int ret;
 
@@ -824,21 +859,9 @@ int sc1777y_generate_cert_request(const struct device *dev,
 		return -EINVAL;
 	}
 
-	ret = sc1777y_command(dev, &cmd, response, sizeof(response), &actual_out_len, NULL);
-	if (ret != 0) {
-		return ret;
-	}
-
+	ret = sc1777y_command(dev, &cmd, out, out_size, &actual_out_len, NULL);
 	*out_len = actual_out_len;
-	if (out_size < actual_out_len) {
-		return -ENOMEM;
-	}
-
-	if (actual_out_len > 0U) {
-		memcpy(out, response, actual_out_len);
-	}
-
-	return 0;
+	return ret;
 }
 
 /***** 5.3.3 Session negotiation flow *****/
@@ -1031,11 +1054,15 @@ int sc1777y_get_platform_type(const struct device *dev, enum sc1777y_platform_ty
 static int sc1777y_init(const struct device *dev)
 {
 	const struct sc1777y_config *cfg = dev->config;
+	struct sc1777y_data *data = dev->data;
+
+	k_mutex_init(&data->lock);
 
 	return spi_is_ready_dt(&cfg->bus) ? 0 : -ENODEV;
 }
 
 #define SC1777Y_DEFINE(inst)                                                                     \
+	static struct sc1777y_data sc1777y_data_##inst;                                         \
 	static const struct sc1777y_config sc1777y_config_##inst = {                            \
 		.bus = {                                                                       \
 			.bus = DEVICE_DT_GET(DT_BUS(DT_DRV_INST(inst))),                      \
@@ -1051,7 +1078,8 @@ static int sc1777y_init(const struct device *dev)
 			},                                                                   \
 		},                                                                           \
 	};                                                                                     \
-	DEVICE_DT_INST_DEFINE(inst, sc1777y_init, NULL, NULL, &sc1777y_config_##inst,          \
+	DEVICE_DT_INST_DEFINE(inst, sc1777y_init, NULL, &sc1777y_data_##inst,                  \
+			      &sc1777y_config_##inst,                                             \
 			      POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE, NULL);
 
 DT_INST_FOREACH_STATUS_OKAY(SC1777Y_DEFINE)
