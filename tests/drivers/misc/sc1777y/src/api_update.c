@@ -38,6 +38,28 @@ ZTEST_F(sc1777y, test_update_identity_sends_001000000000)
 	zassert_equal(sizeof(expected_frame), frame_len);
 }
 
+ZTEST_F(sc1777y, test_get_random8_sends_008400080000)
+{
+	uint8_t rand8[8];
+	uint8_t frame[16];
+	size_t frame_len;
+	const uint8_t expected_frame[] = {0x55, 0x00, 0x84, 0x00, 0x08, 0x00, 0x00, 0x73};
+	const uint8_t expected_rand[] = {0xA0, 0xA1, 0xA2, 0xA3,
+					 0xA4, 0xA5, 0xA6, 0xA7};
+
+	zassert_ok(sc1777y_get_random8(fixture->dev, rand8));
+	zassert_mem_equal(expected_rand, rand8, sizeof(expected_rand));
+	zassert_ok(sc1777y_emul_get_last_command(fixture->emul, frame, sizeof(frame), &frame_len));
+	zassert_mem_equal(expected_frame, frame, sizeof(expected_frame));
+	zassert_equal(sizeof(expected_frame), frame_len);
+}
+
+ZTEST_F(sc1777y, test_get_random8_rejects_null_output)
+{
+	zassert_equal(-EINVAL, sc1777y_get_random8(fixture->dev, NULL));
+	zassert_equal(0, sc1777y_emul_get_command_count(fixture->emul));
+}
+
 ZTEST_F(sc1777y, test_verify_update_auth_sends_008200020008)
 {
 	const uint8_t encrypted8[8] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};

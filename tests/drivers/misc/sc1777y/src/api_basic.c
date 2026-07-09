@@ -21,6 +21,27 @@ ZTEST_F(sc1777y, test_get_random_sends_008400040000)
 	zassert_equal(sizeof(expected_frame), frame_len);
 }
 
+ZTEST_F(sc1777y, test_get_random4_sends_008400040000)
+{
+	uint8_t rand4[4];
+	uint8_t frame[16];
+	size_t frame_len;
+	const uint8_t expected_frame[] = {0x55, 0x00, 0x84, 0x00, 0x04, 0x00, 0x00, 0x7F};
+	const uint8_t expected_rand[] = {0xA0, 0xA1, 0xA2, 0xA3};
+
+	zassert_ok(sc1777y_get_random4(fixture->dev, rand4));
+	zassert_mem_equal(expected_rand, rand4, sizeof(expected_rand));
+	zassert_ok(sc1777y_emul_get_last_command(fixture->emul, frame, sizeof(frame), &frame_len));
+	zassert_mem_equal(expected_frame, frame, sizeof(expected_frame));
+	zassert_equal(sizeof(expected_frame), frame_len);
+}
+
+ZTEST_F(sc1777y, test_get_random4_rejects_null_output)
+{
+	zassert_equal(-EINVAL, sc1777y_get_random4(fixture->dev, NULL));
+	zassert_equal(0, sc1777y_emul_get_command_count(fixture->emul));
+}
+
 ZTEST_F(sc1777y, test_get_random_rejects_invalid_lengths)
 {
 	uint8_t rand4[4];

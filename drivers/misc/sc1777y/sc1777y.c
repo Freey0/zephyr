@@ -502,21 +502,7 @@ int sc1777y_command(const struct device *dev, const struct sc1777y_command *cmd,
 	return -EIO;
 }
 
-int sc1777y_get_random(const struct device *dev, uint8_t *out, size_t len)
-{
-	const struct sc1777y_command cmd = {
-		.cla = 0x00,
-		.ins = 0x84,
-		.p1 = 0x00,
-		.p2 = (uint8_t)len,
-	};
-
-	if (out == NULL || len == 0U || len > UINT8_MAX) {
-		return -EINVAL;
-	}
-
-	return sc1777y_command_expect_len(dev, &cmd, out, len);
-}
+/***** Sensor user operations *****/
 
 int sc1777y_get_sensor_identity(const struct device *dev, struct sc1777y_identity *identity)
 {
@@ -558,6 +544,44 @@ int sc1777y_encrypt_sensor_challenge(const struct device *dev, const uint8_t ran
 	return sc1777y_command_expect_len(dev, &cmd, encrypted8, SC1777Y_SENSOR_AUTH_ENCRYPTED_LEN);
 }
 
+int sc1777y_sensor_encrypt(const struct device *dev, const uint8_t *in, size_t in_len,
+			   uint8_t *out, size_t out_size, size_t *out_len)
+{
+	return sc1777y_sensor_crypto(dev, 0x06, 0x80, 0x01, in, in_len, out, out_size, out_len);
+}
+
+int sc1777y_sensor_decrypt_from_terminal(const struct device *dev, const uint8_t *in,
+					 size_t in_len, uint8_t *out, size_t out_size,
+					 size_t *out_len)
+{
+	return sc1777y_sensor_crypto(dev, 0x08, 0x80, 0x01, in, in_len, out, out_size, out_len);
+}
+
+/***** Terminal user operations *****/
+
+/***** 5.1.1 Identity authentication flow *****/
+
+int sc1777y_get_random(const struct device *dev, uint8_t *out, size_t len)
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x00,
+		.ins = 0x84,
+		.p1 = 0x00,
+		.p2 = (uint8_t)len,
+	};
+
+	if (out == NULL || len == 0U || len > UINT8_MAX) {
+		return -EINVAL;
+	}
+
+	return sc1777y_command_expect_len(dev, &cmd, out, len);
+}
+
+int sc1777y_get_random4(const struct device *dev, uint8_t rand4[4])
+{
+	return sc1777y_get_random(dev, rand4, 4U);
+}
+
 int sc1777y_verify_sensor_auth(const struct device *dev, enum sc1777y_sensor_type type,
 			       const uint8_t sensor_id[8], const uint8_t encrypted8[8],
 			       uint8_t rand4[4])
@@ -589,18 +613,7 @@ int sc1777y_verify_sensor_auth(const struct device *dev, enum sc1777y_sensor_typ
 	return sc1777y_command_expect_len(dev, &cmd, rand4, SC1777Y_SENSOR_AUTH_RAND_LEN);
 }
 
-int sc1777y_sensor_encrypt(const struct device *dev, const uint8_t *in, size_t in_len,
-			   uint8_t *out, size_t out_size, size_t *out_len)
-{
-	return sc1777y_sensor_crypto(dev, 0x06, 0x80, 0x01, in, in_len, out, out_size, out_len);
-}
-
-int sc1777y_sensor_decrypt_from_terminal(const struct device *dev, const uint8_t *in,
-					 size_t in_len, uint8_t *out, size_t out_size,
-					 size_t *out_len)
-{
-	return sc1777y_sensor_crypto(dev, 0x08, 0x80, 0x01, in, in_len, out, out_size, out_len);
-}
+/***** 5.1.2 Business data flow *****/
 
 int sc1777y_terminal_decrypt_sensor(const struct device *dev, enum sc1777y_sensor_type type,
 				    const uint8_t sensor_id[8], const uint8_t *in,
@@ -620,6 +633,8 @@ int sc1777y_terminal_encrypt_sensor(const struct device *dev, enum sc1777y_senso
 					       out_len);
 }
 
+/***** 5.2.1 Key update/recovery flow *****/
+
 int sc1777y_get_update_identity(const struct device *dev, struct sc1777y_identity *identity)
 {
 	const struct sc1777y_command cmd = {
@@ -634,6 +649,11 @@ int sc1777y_get_update_identity(const struct device *dev, struct sc1777y_identit
 	}
 
 	return sc1777y_command_expect_len(dev, &cmd, (uint8_t *)identity, sizeof(*identity));
+}
+
+int sc1777y_get_random8(const struct device *dev, uint8_t rand8[8])
+{
+	return sc1777y_get_random(dev, rand8, 8U);
 }
 
 int sc1777y_verify_update_auth(const struct device *dev, const uint8_t encrypted8[8])
@@ -671,6 +691,8 @@ int sc1777y_apply_key_update(const struct device *dev, const uint8_t *key_data, 
 
 	return sc1777y_command_expect_empty(dev, &cmd);
 }
+
+/***** 5.3.1 Platform basic instructions *****/
 
 int sc1777y_get_version_info(const struct device *dev, struct sc1777y_version_info *version)
 {
@@ -762,51 +784,7 @@ int sc1777y_import_iv(const struct device *dev, const uint8_t iv16[SC1777Y_IV_LE
 	return sc1777y_command_expect_empty(dev, &cmd);
 }
 
-int sc1777y_set_platform_type(const struct device *dev, enum sc1777y_platform_type type)
-{
-	const struct sc1777y_command cmd = {
-		.cla = 0x80,
-		.ins = 0x3E,
-		.p1 = 0x00,
-		.p2 = (uint8_t)type,
-	};
-
-	if (type != SC1777Y_PLATFORM_NANRUI && type != SC1777Y_PLATFORM_WANGAN) {
-		return -EINVAL;
-	}
-
-	return sc1777y_command_expect_empty(dev, &cmd);
-}
-
-int sc1777y_get_platform_type(const struct device *dev, enum sc1777y_platform_type *type)
-{
-	const struct sc1777y_command cmd = {
-		.cla = 0x80,
-		.ins = 0x3E,
-		.p1 = 0x01,
-		.p2 = 0x00,
-	};
-	uint8_t raw_type;
-	int ret;
-
-	if (type == NULL) {
-		return -EINVAL;
-	}
-
-	ret = sc1777y_command_expect_len(dev, &cmd, &raw_type, SC1777Y_PLATFORM_TYPE_LEN);
-	if (ret != 0) {
-		return ret;
-	}
-
-	if (raw_type != SC1777Y_PLATFORM_UNSET && raw_type != SC1777Y_PLATFORM_NANRUI &&
-	    raw_type != SC1777Y_PLATFORM_WANGAN) {
-		return -EIO;
-	}
-
-	*type = (enum sc1777y_platform_type)raw_type;
-
-	return 0;
-}
+/***** 5.3.2 Certificate request flow *****/
 
 int sc1777y_generate_sm2_keypair(const struct device *dev)
 {
@@ -862,6 +840,8 @@ int sc1777y_generate_cert_request(const struct device *dev,
 
 	return 0;
 }
+
+/***** 5.3.3 Session negotiation flow *****/
 
 int sc1777y_session_begin(const struct device *dev, uint8_t en_r1[SC1777Y_SESSION_RANDOM_LEN])
 {
@@ -984,16 +964,68 @@ int sc1777y_session_confirm(const struct device *dev,
 	return sc1777y_command_expect_len(dev, &cmd, dkhash32, SC1777Y_SESSION_DKHASH_LEN);
 }
 
+/***** 5.3.4 Session-key encryption flow *****/
+
 int sc1777y_session_encrypt(const struct device *dev, const uint8_t *in, size_t in_len,
 			    uint8_t *out, size_t out_size, size_t *out_len)
 {
 	return sc1777y_session_crypto(dev, 0x80, in, in_len, out, out_size, out_len);
 }
 
+/***** 5.3.5 Session-key decryption flow *****/
+
 int sc1777y_session_decrypt(const struct device *dev, const uint8_t *in, size_t in_len,
 			    uint8_t *out, size_t out_size, size_t *out_len)
 {
 	return sc1777y_session_crypto(dev, 0x81, in, in_len, out, out_size, out_len);
+}
+
+/***** 5.3.6 Platform type selection flow *****/
+
+int sc1777y_set_platform_type(const struct device *dev, enum sc1777y_platform_type type)
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0x3E,
+		.p1 = 0x00,
+		.p2 = (uint8_t)type,
+	};
+
+	if (type != SC1777Y_PLATFORM_NANRUI && type != SC1777Y_PLATFORM_WANGAN) {
+		return -EINVAL;
+	}
+
+	return sc1777y_command_expect_empty(dev, &cmd);
+}
+
+int sc1777y_get_platform_type(const struct device *dev, enum sc1777y_platform_type *type)
+{
+	const struct sc1777y_command cmd = {
+		.cla = 0x80,
+		.ins = 0x3E,
+		.p1 = 0x01,
+		.p2 = 0x00,
+	};
+	uint8_t raw_type;
+	int ret;
+
+	if (type == NULL) {
+		return -EINVAL;
+	}
+
+	ret = sc1777y_command_expect_len(dev, &cmd, &raw_type, SC1777Y_PLATFORM_TYPE_LEN);
+	if (ret != 0) {
+		return ret;
+	}
+
+	if (raw_type != SC1777Y_PLATFORM_UNSET && raw_type != SC1777Y_PLATFORM_NANRUI &&
+	    raw_type != SC1777Y_PLATFORM_WANGAN) {
+		return -EIO;
+	}
+
+	*type = (enum sc1777y_platform_type)raw_type;
+
+	return 0;
 }
 
 static int sc1777y_init(const struct device *dev)
