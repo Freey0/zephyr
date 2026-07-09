@@ -1,67 +1,60 @@
-# SC1777Y Sample Guide Design
+# SC1777Y 样例说明书化设计
 
-Date: 2026-07-09
+日期：2026-07-09
 
-## Goal
+## 目标
 
-Reshape `samples/drivers/sc1777y` into a guide-style sample for new driver
-users. The sample should explain how to follow the PDF chapter 5 interaction
-flows with the SC1777Y driver. It should make the data exchanged between
-Sensor, Maintenance Software, Platform, and Terminal clear.
+将 `samples/drivers/sc1777y` 调整为面向新用户的说明书式样例。样例的重点是演示如何按 PDF 第 5 章的交互流程使用 SC1777Y 驱动，并清晰说明传感器、维护软件、平台、终端之间交换了哪些数据。
 
-The sample is not responsible for validating emulator fixed responses, APDU
-frames, or edge cases. Those remain the job of `tests/drivers/misc/sc1777y`.
+样例不负责验证模拟器的固定返回值、APDU 帧内容或错误路径。这些验证继续由 `tests/drivers/misc/sc1777y` 承担。
 
-## Sample Responsibility
+## 样例职责
 
-The sample should:
+样例应该做到：
 
-- Show the chapter 5 flows as executable examples.
-- Explain prerequisites from the PDF before each flow.
-- Show which user sends which data to which other user.
-- Show which fields are consumed or produced by each driver API call.
-- Check only whether each driver API call succeeds.
-- End with `SC1777Y sample PASS` so the existing console harness can still
-  validate that the example ran.
+- 以可执行代码展示第 5 章的交互流程。
+- 在每个流程前说明 PDF 中的重要前置条件。
+- 说明哪个用户向哪个用户发送哪些字段。
+- 说明每个驱动 API 产生、消费或校验哪些字段。
+- 只检查每个驱动 API 的返回值是否成功。
+- 保留 `SC1777Y sample PASS`，让现有 console harness 仍能判断样例执行成功。
 
-The sample should not:
+样例不应该做：
 
-- Compare emulator fixed data with `expect_equal`.
-- Check emulator deterministic byte sequences with `expect_sequence`.
-- Reconstruct emulator XOR behavior with `fill_xor`.
-- Treat the sample as protocol-frame or emulator-output test coverage.
+- 使用 `expect_equal` 比较模拟器固定数据。
+- 使用 `expect_sequence` 检查模拟器确定性字节序列。
+- 使用 `fill_xor` 复现模拟器的 XOR 行为。
+- 把样例当作协议帧或模拟器输出的测试覆盖。
 
-## Function Structure
+## 流程函数结构
 
-Each `run_5_x_x_*()` function should follow this shape:
+每个 `run_5_x_x_*()` 函数按同一结构组织：
 
-1. A block comment with the PDF section title.
-2. An ASCII flow chart.
-3. `Prerequisites:` listing protocol or deployment requirements from the PDF.
-4. `Data exchanged:` listing fields exchanged between users.
-5. `Guide:` explaining the purpose of the flow and the driver boundary.
-6. Local variables for this flow's exchanged data.
-7. `printf` lines that print the flow name, prerequisites, and exchanged data.
-8. Step comments mapping PDF steps to driver calls or user handoffs.
-9. Driver API calls with return-code checks.
-10. A flow-level `PASS` line.
+1. PDF 小节标题。
+2. ASCII 风格流程图。
+3. `Prerequisites:`，列出 PDF 中的协议或部署前置条件。
+4. `Data exchanged:`，列出用户之间交换的字段。
+5. `Guide:`，解释流程目的和驱动调用边界。
+6. 本流程内部的数据变量。
+7. `printf` 输出流程名称、前置条件和交换数据。
+8. 步骤注释，将 PDF 步骤映射到驱动调用或用户间交付。
+9. 驱动 API 调用和返回值检查。
+10. 流程级 `PASS` 输出。
 
-All data variables used by a flow should stay inside that flow function. The
-file should keep only general helpers at file scope.
+流程中使用的数据变量应放在对应流程函数内部。文件作用域只保留通用 helper。
 
-## Comment Style
+## 注释风格
 
-Comments should read like a usage guide.
+注释应像使用说明。
 
-Driver-call steps should say what the current user is doing internally:
+驱动调用步骤说明当前用户内部正在做什么：
 
 ```c
 /* Flow step 1, Terminal internal operation: generate Rand1[4]. */
 rc = sc1777y_get_random4(dev, rand1);
 ```
 
-User handoff steps should state the data movement, without explaining that
-there is no driver call:
+用户间交付步骤只描述数据流转，不解释没有驱动调用：
 
 ```c
 /*
@@ -71,17 +64,13 @@ there is no driver call:
 printf("  Terminal -> Sensor: Rand1[4]\n");
 ```
 
-The comments should avoid making the security chip an external participant.
-The visible users are Terminal, Sensor, Maintenance Software, and Platform.
-Chip interaction may be mentioned only as an internal operation of one user
-when that makes the driver call clearer.
+注释不应把安全芯片作为外部参与方。样例中的可见用户是 Terminal、Sensor、Maintenance Software、Platform。只有在解释驱动调用时，才可以把芯片交互作为某个用户的内部操作提及。
 
-## Output Style
+## 运行输出风格
 
-Runtime output should be useful as a flow trace. It should print field names
-and lengths, not fixed emulator bytes.
+运行输出应作为流程 trace 使用。输出字段名和长度，不输出模拟器固定字节。
 
-Example:
+示例：
 
 ```text
 [5.3.3] Session negotiation
@@ -98,19 +87,18 @@ Example:
 [5.3.3] PASS
 ```
 
-Errors should still name the failing API:
+错误输出仍应指出失败的 API：
 
 ```text
 5.3.3 session_begin failed: -5
 SC1777Y sample FAIL
 ```
 
-## Platform Message Format
+## 平台报文格式
 
-For Platform exchanges, preserve the PDF message shape first, then call out the
-driver-relevant fields.
+与平台交互时，先保留 PDF 中的完整报文结构，再说明驱动重点处理的字段。
 
-Example for session negotiation:
+会话协商示例：
 
 ```c
  * Data exchanged:
@@ -130,7 +118,7 @@ Example for session negotiation:
  *   Key driver data: AuthResult, DKHash[32]
 ```
 
-For non-Platform flows, list the exchanged fields directly:
+非平台流程直接列出交换字段：
 
 ```c
  * Data exchanged:
@@ -139,52 +127,36 @@ For non-Platform flows, list the exchanged fields directly:
  * - Terminal -> Sensor: AuthResult
 ```
 
-## Required Prerequisites
+## 必要前置条件
 
-Each flow should include the important PDF constraints in `Prerequisites:`.
-At minimum:
+每个流程都应在 `Prerequisites:` 中写出 PDF 明确要求或使用时必须知道的条件。至少包括：
 
-- 5.1.1 Identity authentication: Sensor and Terminal should complete identity
-  authentication before business data exchange.
-- 5.1.2 Business data: Terminal should maintain the mapping between Sensor
-  device address and `sensorEsamID[8]` before handling Sensor data.
-- 5.2.1 Key update/recovery: Maintenance Software should have the update or
-  recovery USBKey and interface library, and a field-maintenance channel to
-  Terminal.
-- 5.3.1 Platform basic instructions: Platform public key, AK, and IV material
-  come from Platform or Platform configuration.
-- 5.3.2 Certificate request: Terminal should generate or confirm the local SM2
-  key pair before generating CSR data. Regenerating the key pair overwrites the
-  old key pair and requires certificate re-enrollment.
-- 5.3.3 Session negotiation: before session begin, Terminal certificate exists
-  and Platform public key has been imported. Before auth response generation,
-  Platform type has been selected.
-- 5.3.4 Session-key encryption: session negotiation has succeeded, and input
-  length satisfies the 16-byte block requirement.
-- 5.3.5 Session-key decryption: session negotiation has succeeded, and
-  Terminal has parsed `IV[16]` and ciphertext from Platform's message.
-- 5.3.6 Platform type selection: this should run before the 5.3.3 auth response
-  step that depends on Platform type.
+- 5.1.1 身份认证：传感器和终端进行业务数据交互前，应先完成身份认证。
+- 5.1.2 业务数据：终端处理传感器数据前，应维护传感器设备地址与 `sensorEsamID[8]` 的对应关系。
+- 5.2.1 密钥更新/恢复：维护软件应具备密钥更新/恢复 USBKey 和接口库，并与终端建立现场维护通道。
+- 5.3.1 基本指令：平台公钥、AK、IV 材料来自平台或平台配置流程。
+- 5.3.2 证书请求：生成证书请求前，终端应生成或确认本地 SM2 密钥对。重新生成密钥对会覆盖旧密钥对，并需要重新申请证书。
+- 5.3.3 会话协商：会话发起前，终端证书已存在，平台公钥已导入。生成安全认证响应前，平台类型已设置。
+- 5.3.4 会话密钥加密：会话协商已成功，输入长度满足 16 字节块约束。
+- 5.3.5 会话密钥解密：会话协商已成功，终端已从平台报文解析出 `IV[16]` 和密文数据。
+- 5.3.6 平台类型选择：应在 5.3.3 中依赖平台类型的安全认证响应步骤之前执行。
 
-## Testing Strategy
+## 测试策略
 
-The sample should be tested as an executable guide:
+样例按“可执行说明书”测试：
 
-- `sample.yaml` keeps the console harness looking for `SC1777Y sample PASS`.
-- The sample checks `rc` after each driver API call.
-- The sample does not check fixed bytes returned by the emulator.
-- Emulator behavior, APDU frames, error paths, and exact output bytes are
-  covered by `tests/drivers/misc/sc1777y`.
+- `sample.yaml` 继续使用 console harness 匹配 `SC1777Y sample PASS`。
+- 样例只在每个驱动 API 调用后检查 `rc`。
+- 样例不检查模拟器返回的固定字节。
+- 模拟器行为、APDU 帧、错误路径、精确输出字节由 `tests/drivers/misc/sc1777y` 覆盖。
 
-After implementation, run:
+实现后运行：
 
 ```sh
 scripts/twister -T samples/drivers/sc1777y -p native_sim --inline-logs
 scripts/twister -T tests/drivers/misc/sc1777y -p native_sim --inline-logs
 ```
 
-## Open Scope Boundary
+## 范围边界
 
-This design does not add a new helper library or a second sample. It reshapes
-the existing sample into a clearer guide while keeping the current test suite
-as the source of detailed behavioral verification.
+本设计不新增 helper 库，也不新增第二个 sample。只重塑现有 sample，使其成为更清晰的使用说明；详细行为验证继续由现有测试套件承担。
