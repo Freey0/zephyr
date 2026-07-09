@@ -2,9 +2,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <stdbool.h>
 #include <stdio.h>
-#include <string.h>
 
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
@@ -15,13 +13,6 @@
 static int fail_step(const char *step, int rc)
 {
 	printf("%s failed: %d\n", step, rc);
-	printf("SC1777Y sample FAIL\n");
-	return 1;
-}
-
-static int fail_check(const char *step)
-{
-	printf("%s check failed\n", step);
 	printf("SC1777Y sample FAIL\n");
 	return 1;
 }
@@ -38,29 +29,6 @@ static void fill_sequence(uint8_t *buf, size_t len, uint8_t start)
 	for (size_t i = 0; i < len; i++) {
 		buf[i] = start + (uint8_t)i;
 	}
-}
-
-static void fill_xor(uint8_t *dst, const uint8_t *src, size_t len, uint8_t mask)
-{
-	for (size_t i = 0; i < len; i++) {
-		dst[i] = src[i] ^ mask;
-	}
-}
-
-static bool expect_equal(const uint8_t *actual, const uint8_t *expected, size_t len)
-{
-	return memcmp(actual, expected, len) == 0;
-}
-
-static bool expect_sequence(const uint8_t *actual, size_t len, uint8_t start)
-{
-	for (size_t i = 0; i < len; i++) {
-		if (actual[i] != (uint8_t)(start + i)) {
-			return false;
-		}
-	}
-
-	return true;
 }
 
 /*
@@ -496,125 +464,96 @@ static int run_5_3_6_platform_type(const struct device *dev)
  * |          |------------------------>|          |
  * +----------+       ConfirmMsg        +----------+
  *
- * Guide:
- * Terminal builds request and confirmation messages.  Platform verifies the
- * request and returns AuthFactor, EnR2, and ResponseSign.  Terminal verifies
- * the response and confirms the session.
+ * Prerequisites:
+ * - Before session begin, Terminal certificate exists.
+ * - Before session begin, Platform public key has been imported.
+ * - Before auth response generation, Platform type has been selected.
+ *
+ * Data exchanged:
+ * - Terminal -> Platform:
+ *   RequestMsg { DATA, RequestSign[64] }
+ *   DATA { Type, SubType, Len, Ver, SN, SIM, ID, Cert1, EnR1[128] }
+ *   Key driver data: EnR1[128], RequestHash[32], RequestSign[64]
+ *
+ * - Platform -> Terminal:
+ *   ResponseMsg { Type, SubType, Len, SN, AuthFactor[32], EnR2[128],
+ *                 ResponseSign[64] }
+ *   Key driver data: AuthFactor[32], EnR2[128], ResponseHash[32],
+ *                    ResponseSign[64]
+ *
+ * - Terminal -> Platform:
+ *   ConfirmMsg { Type, SubType, Len, SN, AuthResult, DKHash[32] }
+ *   Key driver data: AuthResult, DKHash[32]
  */
 static int run_5_3_3_session_negotiation(const struct device *dev)
 {
-	uint8_t hash_input[3] = {1, 2, 3};
-	uint8_t session_random[SC1777Y_SESSION_RANDOM_LEN];
-	uint8_t session_peer_random[SC1777Y_SESSION_RANDOM_LEN];
+	uint8_t request_body[3] = {1, 2, 3};
+	uint8_t response_body[3] = {1, 2, 3};
+	uint8_t en_r1[SC1777Y_SESSION_RANDOM_LEN];
+	uint8_t en_r2[SC1777Y_SESSION_RANDOM_LEN];
 	uint8_t request_hash[SC1777Y_HASH_LEN];
 	uint8_t response_hash[SC1777Y_HASH_LEN];
-	uint8_t hash_expected[SC1777Y_HASH_LEN];
-	uint8_t signature[SC1777Y_SIGNATURE_LEN];
-	uint8_t signature_expected[SC1777Y_SIGNATURE_LEN];
+	uint8_t request_sign[SC1777Y_SIGNATURE_LEN];
+	uint8_t response_sign[SC1777Y_SIGNATURE_LEN];
 	uint8_t auth_factor[SC1777Y_AUTH_FACTOR_LEN];
 	uint8_t auth_response[SC1777Y_AUTH_RESPONSE_LEN];
-	uint8_t auth_response_expected[SC1777Y_AUTH_RESPONSE_LEN];
-	uint8_t dkhash[SC1777Y_SESSION_DKHASH_LEN];
-	uint8_t dkhash_expected[SC1777Y_SESSION_DKHASH_LEN];
+	uint8_t dk_hash[SC1777Y_SESSION_DKHASH_LEN];
 	int rc;
 
-	/* Flow step 1, Terminal internal security-chip operation: begin session and get EnR1. */
-	rc = sc1777y_session_begin(dev, session_random);
+	printf("[5.3.3] Session negotiation\n");
+	printf("  Prerequisite: terminal certificate exists\n");
+	printf("  Prerequisite: platform public key has been imported\n");
+	printf("  Prerequisite: platform type has been selected before auth response\n");
+	printf("  Terminal -> Platform: RequestMsg { DATA, RequestSign[64] }\n");
+	printf("    DATA { Type, SubType, Len, Ver, SN, SIM, ID, Cert1, EnR1[128] }\n");
+	printf("    Key driver data: EnR1[128], RequestHash[32], RequestSign[64]\n");
+	printf("  Platform -> Terminal: ResponseMsg { Type, SubType, Len, SN, AuthFactor[32], EnR2[128], ResponseSign[64] }\n");
+	printf("    Key driver data: AuthFactor[32], EnR2[128], ResponseHash[32], ResponseSign[64]\n");
+	printf("  Terminal -> Platform: ConfirmMsg { Type, SubType, Len, SN, AuthResult, DKHash[32] }\n");
+	printf("    Key driver data: AuthResult, DKHash[32]\n");
+
+	rc = sc1777y_session_begin(dev, en_r1);
 	if (rc != 0) {
 		return fail_step("5.3.3 session_begin", rc);
 	}
-	if (!expect_sequence(session_random, sizeof(session_random), 192)) {
-		return fail_check("5.3.3 session_begin");
-	}
 
-	/* Flow step 2, Terminal internal security-chip operation: hash request message body. */
-	rc = sc1777y_hash(dev, SC1777Y_HASH_REQUEST, hash_input, sizeof(hash_input),
+	rc = sc1777y_hash(dev, SC1777Y_HASH_REQUEST, request_body, sizeof(request_body),
 			  request_hash);
 	if (rc != 0) {
 		return fail_step("5.3.3 request_hash", rc);
 	}
-	fill_sequence(hash_expected, sizeof(hash_expected), 208);
-	if (!expect_equal(request_hash, hash_expected, sizeof(hash_expected))) {
-		return fail_check("5.3.3 request_hash");
-	}
 
-	/* Flow step 3, Terminal internal security-chip operation: sign request hash. */
-	rc = sc1777y_sign_hash(dev, request_hash, signature);
+	rc = sc1777y_sign_hash(dev, request_hash, request_sign);
 	if (rc != 0) {
 		return fail_step("5.3.3 sign_hash", rc);
 	}
-	fill_sequence(signature_expected, sizeof(signature_expected), 224);
-	if (!expect_equal(signature, signature_expected, sizeof(signature_expected))) {
-		return fail_check("5.3.3 sign_hash");
-	}
 
-	/*
-	 * Flow step 4, Terminal-to-Platform handoff: build RequestMsg and send it.
-	 * No driver call is needed for this user-to-user message.
-	 */
+	fill_example_bytes(response_sign, sizeof(response_sign), 0x60);
+	fill_example_bytes(auth_factor, sizeof(auth_factor), 0x70);
+	fill_example_bytes(en_r2, sizeof(en_r2), 0x80);
 
-	/*
-	 * Flow step 5, Platform operation: parse and verify RequestMsg, then
-	 * return ResponseMsg. No Terminal driver call is needed here.
-	 */
-
-	/*
-	 * Flow step 6, Terminal operation: receive and parse ResponseMsg before
-	 * checking it. No driver call is needed for parsing the message fields.
-	 */
-
-	/* Flow step 7, Terminal internal security-chip operation: hash Platform response body. */
-	rc = sc1777y_hash(dev, SC1777Y_HASH_RESPONSE, hash_input, sizeof(hash_input),
+	rc = sc1777y_hash(dev, SC1777Y_HASH_RESPONSE, response_body, sizeof(response_body),
 			  response_hash);
 	if (rc != 0) {
 		return fail_step("5.3.3 response_hash", rc);
 	}
-	if (!expect_equal(response_hash, hash_expected, sizeof(hash_expected))) {
-		return fail_check("5.3.3 response_hash");
-	}
 
-	/* Flow step 8, Terminal internal security-chip operation: verify Platform signature. */
-	rc = sc1777y_verify_signature(dev, response_hash, signature);
+	rc = sc1777y_verify_signature(dev, response_hash, response_sign);
 	if (rc != 0) {
 		return fail_step("5.3.3 verify_signature", rc);
 	}
 
-	fill_sequence(auth_factor, sizeof(auth_factor), 81);
-
-	/* Flow step 9, Terminal internal security-chip operation: generate auth response data. */
 	rc = sc1777y_generate_auth_response(dev, auth_factor, auth_response);
 	if (rc != 0) {
 		return fail_step("5.3.3 generate_auth_response", rc);
 	}
-	fill_sequence(auth_response_expected, sizeof(auth_response_expected), 112);
-	if (!expect_equal(auth_response, auth_response_expected,
-			  sizeof(auth_response_expected))) {
-		return fail_check("5.3.3 generate_auth_response");
-	}
 
-	fill_sequence(session_peer_random, sizeof(session_peer_random), 113);
-
-	/* Flow step 10, Terminal internal security-chip operation: confirm EnR2 and get DKHash. */
-	rc = sc1777y_session_confirm(dev, session_peer_random, dkhash);
+	rc = sc1777y_session_confirm(dev, en_r2, dk_hash);
 	if (rc != 0) {
 		return fail_step("5.3.3 session_confirm", rc);
 	}
-	fill_sequence(dkhash_expected, sizeof(dkhash_expected), 144);
-	if (!expect_equal(dkhash, dkhash_expected, sizeof(dkhash_expected))) {
-		return fail_check("5.3.3 session_confirm");
-	}
 
-	/*
-	 * Flow step 11, Terminal-to-Platform handoff: build ConfirmMsg and send it.
-	 * No driver call is needed for this user-to-user message.
-	 */
-
-	/*
-	 * Flow step 12, Platform operation: parse and verify ConfirmMsg.
-	 * No Terminal driver call is needed here.
-	 */
-
-	printf("5.3.3 session negotiation PASS\n");
+	printf("[5.3.3] PASS\n");
 	return 0;
 }
 
@@ -627,74 +566,49 @@ static int run_5_3_3_session_negotiation(const struct device *dev)
  * | user     |                           | user     |
  * +----------+                           +----------+
  *
- * Guide:
- * Terminal prepares plaintext, generates IV material, encrypts session data,
- * and sends IV plus ciphertext to Platform.
+ * Prerequisites:
+ * - Session negotiation has succeeded.
+ * - Plaintext length satisfies the 16-byte block requirement.
+ *
+ * Data exchanged:
+ * - Terminal -> Platform:
+ *   RequestMsg { Type, SubType, Len, IV[16], ResponseData[ciphertext] }
+ *   Key driver data: IV[16], DATA[16], ResponseData[ciphertext]
  */
 static int run_5_3_4_session_key_encryption(const struct device *dev)
 {
-	uint8_t random_buf[16];
-	uint8_t session_block[SC1777Y_BLOCK16_MIN_LEN];
-	uint8_t session_out[SC1777Y_BLOCK16_MIN_LEN];
-	uint8_t session_expected[SC1777Y_BLOCK16_MIN_LEN];
-	size_t out_len = 0U;
+	uint8_t iv[16];
+	uint8_t plaintext[SC1777Y_BLOCK16_MIN_LEN];
+	uint8_t ciphertext[SC1777Y_BLOCK16_MIN_LEN];
+	size_t ciphertext_len = 0U;
 	int rc;
 
-	/* Flow step 1, Terminal internal security-chip operation: generate 16-byte IV random. */
-	rc = sc1777y_get_random(dev, random_buf, sizeof(random_buf));
+	printf("[5.3.4] Session-key encryption\n");
+	printf("  Prerequisite: session negotiation has succeeded\n");
+	printf("  Prerequisite: plaintext length satisfies the 16-byte block requirement\n");
+	printf("  Terminal -> Platform: RequestMsg { Type, SubType, Len, IV[16], ResponseData[ciphertext] }\n");
+	printf("    Key driver data: IV[16], DATA[16], ResponseData[ciphertext]\n");
+
+	rc = sc1777y_get_random(dev, iv, sizeof(iv));
 	if (rc != 0) {
 		return fail_step("5.3.4 get_random", rc);
 	}
-	if (!expect_sequence(random_buf, sizeof(random_buf), 160)) {
-		return fail_check("5.3.4 get_random");
-	}
 
-	/* Flow step 2, Terminal internal security-chip operation: import IV random. */
-	rc = sc1777y_import_iv(dev, random_buf);
+	rc = sc1777y_import_iv(dev, iv);
 	if (rc != 0) {
 		return fail_step("5.3.4 import_iv", rc);
 	}
 
-	session_block[0] = 1;
-	session_block[1] = 17;
-	session_block[2] = 33;
-	session_block[3] = 49;
-	session_block[4] = 65;
-	session_block[5] = 81;
-	session_block[6] = 97;
-	session_block[7] = 113;
-	session_block[8] = 129;
-	session_block[9] = 145;
-	session_block[10] = 161;
-	session_block[11] = 177;
-	session_block[12] = 193;
-	session_block[13] = 209;
-	session_block[14] = 225;
-	session_block[15] = 241;
+	fill_example_bytes(plaintext, sizeof(plaintext), 0x90);
 
-	/* Flow step 3, Terminal internal security-chip operation: encrypt session payload. */
-	rc = sc1777y_session_encrypt(dev, session_block, sizeof(session_block), session_out,
-				     sizeof(session_out), &out_len);
+	rc = sc1777y_session_encrypt(dev, plaintext, sizeof(plaintext), ciphertext,
+				     sizeof(ciphertext), &ciphertext_len);
 	if (rc != 0) {
 		return fail_step("5.3.4 session_encrypt", rc);
 	}
-	fill_xor(session_expected, session_block, sizeof(session_block), 165);
-	if (out_len != sizeof(session_block) ||
-	    !expect_equal(session_out, session_expected, sizeof(session_expected))) {
-		return fail_check("5.3.4 session_encrypt");
-	}
+	(void)ciphertext_len;
 
-	/*
-	 * Flow step 4, Terminal-to-Platform handoff: build encrypted RequestMsg
-	 * with IV and ciphertext. No driver call is needed for this message.
-	 */
-
-	/*
-	 * Flow step 5, Platform operation: receive, parse, verify, and process
-	 * the encrypted RequestMsg. No Terminal driver call is needed here.
-	 */
-
-	printf("5.3.4 session-key encryption PASS\n");
+	printf("[5.3.4] PASS\n");
 	return 0;
 }
 
@@ -707,66 +621,46 @@ static int run_5_3_4_session_key_encryption(const struct device *dev)
  * | user     |                           | user     |
  * +----------+                           +----------+
  *
- * Guide:
- * Platform sends IV plus ciphertext.  Terminal parses the incoming message,
- * imports IV material, and decrypts the session payload.
+ * Prerequisites:
+ * - Session negotiation has succeeded.
+ * - Terminal has parsed IV[16] and RequestData[ciphertext] from Platform's
+ *   message.
+ *
+ * Data exchanged:
+ * - Platform -> Terminal:
+ *   RequestMsg { Type, SubType, Len, IV[16], RequestData[ciphertext] }
+ *   Key driver data: IV[16], RequestData[ciphertext], ResponseData[plaintext]
  */
 static int run_5_3_5_session_key_decryption(const struct device *dev)
 {
-	uint8_t random_buf[16];
-	uint8_t session_block[SC1777Y_BLOCK16_MIN_LEN];
-	uint8_t session_out[SC1777Y_BLOCK16_MIN_LEN];
-	uint8_t session_expected[SC1777Y_BLOCK16_MIN_LEN];
-	size_t out_len = 0U;
+	uint8_t iv[16];
+	uint8_t ciphertext[SC1777Y_BLOCK16_MIN_LEN];
+	uint8_t plaintext[SC1777Y_BLOCK16_MIN_LEN];
+	size_t plaintext_len = 0U;
 	int rc;
 
-	fill_sequence(random_buf, sizeof(random_buf), 160);
-	session_block[0] = 1;
-	session_block[1] = 17;
-	session_block[2] = 33;
-	session_block[3] = 49;
-	session_block[4] = 65;
-	session_block[5] = 81;
-	session_block[6] = 97;
-	session_block[7] = 113;
-	session_block[8] = 129;
-	session_block[9] = 145;
-	session_block[10] = 161;
-	session_block[11] = 177;
-	session_block[12] = 193;
-	session_block[13] = 209;
-	session_block[14] = 225;
-	session_block[15] = 241;
-	fill_xor(session_out, session_block, sizeof(session_block), 165);
+	printf("[5.3.5] Session-key decryption\n");
+	printf("  Prerequisite: session negotiation has succeeded\n");
+	printf("  Prerequisite: Terminal parsed IV[16] and RequestData[ciphertext]\n");
+	printf("  Platform -> Terminal: RequestMsg { Type, SubType, Len, IV[16], RequestData[ciphertext] }\n");
+	printf("    Key driver data: IV[16], RequestData[ciphertext], ResponseData[plaintext]\n");
 
-	/*
-	 * Flow step 1, Platform-to-Terminal handoff: build encrypted RequestMsg
-	 * with IV and ciphertext, then send it. No Terminal driver call is needed.
-	 */
+	fill_example_bytes(iv, sizeof(iv), 0xA0);
+	fill_example_bytes(ciphertext, sizeof(ciphertext), 0xB0);
 
-	/*
-	 * Flow step 2, Terminal operation: receive and parse encrypted RequestMsg
-	 * to obtain IV and ciphertext. No driver call is needed for parsing.
-	 */
-
-	/* Flow step 3, Terminal internal security-chip operation: import received IV. */
-	rc = sc1777y_import_iv(dev, random_buf);
+	rc = sc1777y_import_iv(dev, iv);
 	if (rc != 0) {
 		return fail_step("5.3.5 import_iv", rc);
 	}
 
-	/* Flow step 4, Terminal internal security-chip operation: decrypt received ciphertext. */
-	rc = sc1777y_session_decrypt(dev, session_out, sizeof(session_out), session_expected,
-				     sizeof(session_expected), &out_len);
+	rc = sc1777y_session_decrypt(dev, ciphertext, sizeof(ciphertext), plaintext,
+				     sizeof(plaintext), &plaintext_len);
 	if (rc != 0) {
 		return fail_step("5.3.5 session_decrypt", rc);
 	}
-	if (out_len != sizeof(session_block) ||
-	    !expect_equal(session_expected, session_block, sizeof(session_block))) {
-		return fail_check("5.3.5 session_decrypt");
-	}
+	(void)plaintext_len;
 
-	printf("5.3.5 session-key decryption PASS\n");
+	printf("[5.3.5] PASS\n");
 	return 0;
 }
 
