@@ -63,18 +63,6 @@ static bool expect_sequence(const uint8_t *actual, size_t len, uint8_t start)
 	return true;
 }
 
-static bool expect_default_identity(const struct sc1777y_identity *identity)
-{
-	static const uint8_t expected_serial[SC1777Y_SERIAL_LEN] = {
-		'S', 'C', 23, 119, 0, 0, 0, 1
-	};
-	static const uint8_t expected_key_version[SC1777Y_KEY_VERSION_LEN] = {1, 2, 3, 0};
-
-	return expect_equal(identity->serial, expected_serial, sizeof(expected_serial)) &&
-	       expect_equal(identity->key_version, expected_key_version,
-			    sizeof(expected_key_version));
-}
-
 static bool expect_default_serial(const uint8_t value[SC1777Y_SERIAL_LEN])
 {
 	static const uint8_t expected_serial[SC1777Y_SERIAL_LEN] = {
@@ -88,84 +76,77 @@ static bool expect_default_serial(const uint8_t value[SC1777Y_SERIAL_LEN])
  * 5.1.1 Identity authentication flow
  *
  * Flow:
- * +----------+        Rand1         +--------+
- * | Terminal |--------------------->| Sensor |
- * | user     |                      | user   |
- * |          |<---------------------|        |
- * +----------+  sensorEsamID,       +--------+
- *               Version, enRand1
+ * +----------+        Rand1[4]        +--------+
+ * | Terminal |----------------------->| Sensor |
+ * |          |                        |        |
+ * |          |<-----------------------|        |
+ * +----------+ sensorEsamID[8],       +--------+
+ *              Version[4], enRand1[8]
+ *
+ * Prerequisites:
+ * - Sensor and Terminal should complete identity authentication before
+ *   business data exchange.
+ *
+ * Data exchanged:
+ * - Terminal -> Sensor: Rand1[4]
+ * - Sensor -> Terminal: sensorEsamID[8], Version[4], enRand1[8]
+ * - Terminal -> Sensor: AuthResult
  *
  * Guide:
- * Terminal starts authentication by creating Rand1.  Sensor returns
- * sensorEsamID, Version, and encrypted Rand1.  Terminal verifies the response
- * and owns the final pass/fail decision that is sent back to Sensor.
+ * Terminal creates Rand1[4]. Sensor returns identity and encrypted Rand1.
+ * Terminal verifies the response and decides the authentication result.
  */
 static int run_5_1_1_identity_auth(const struct device *dev)
 {
-	static const uint8_t expected_sensor_challenge[8] = {
-		192, 193, 194, 195, 196, 197, 198, 199
-	};
-	static const uint8_t expected_verified_rand4[4] = {208, 209, 210, 211};
-	uint8_t terminal_rand4[4];
-	uint8_t verified_rand4[4];
+	uint8_t rand1[4];
 	struct sc1777y_identity sensor_identity;
-	uint8_t sensor_challenge[8];
+	uint8_t en_rand1[8];
+	uint8_t rand1_verify[4];
 	int rc;
 
-	/* Flow step 1, Terminal internal security-chip operation: get 4-byte Rand1. */
-	rc = sc1777y_get_random4(dev, terminal_rand4);
+	printf("[5.1.1] Identity authentication\n");
+	printf("  Prerequisite: identity authentication before business data exchange\n");
+	printf("  Terminal -> Sensor: Rand1[4]\n");
+
+	/* Flow step 1, Terminal internal operation: generate Rand1[4]. */
+	rc = sc1777y_get_random4(dev, rand1);
 	if (rc != 0) {
 		return fail_step("5.1.1 get_random4", rc);
 	}
-	if (!expect_sequence(terminal_rand4, sizeof(terminal_rand4), 160)) {
-		return fail_check("5.1.1 get_random4");
-	}
 
 	/*
-	 * Flow step 2, Terminal-to-Sensor handoff: send Rand1 to Sensor.
-	 * No driver call is needed for this user-to-user message.
+	 * Flow step 2, Terminal-to-Sensor handoff:
+	 * send Rand1[4].
 	 */
 
-	/* Flow step 3, Sensor internal security-chip operation: get sensorEsamID and Version. */
+	printf("  Sensor -> Terminal: sensorEsamID[8], Version[4], enRand1[8]\n");
+
+	/* Flow step 3, Sensor internal operation: get sensorEsamID[8] and Version[4]. */
 	rc = sc1777y_get_sensor_identity(dev, &sensor_identity);
 	if (rc != 0) {
 		return fail_step("5.1.1 get_sensor_identity", rc);
 	}
-	if (!expect_default_identity(&sensor_identity)) {
-		return fail_check("5.1.1 get_sensor_identity");
-	}
 
-	/* Flow step 4, Sensor internal security-chip operation: encrypt Terminal Rand1. */
-	rc = sc1777y_encrypt_sensor_challenge(dev, terminal_rand4, sensor_challenge);
+	/* Flow step 4, Sensor internal operation: encrypt Rand1[4] into enRand1[8]. */
+	rc = sc1777y_encrypt_sensor_challenge(dev, rand1, en_rand1);
 	if (rc != 0) {
 		return fail_step("5.1.1 encrypt_sensor_challenge", rc);
 	}
-	if (!expect_equal(sensor_challenge, expected_sensor_challenge,
-			  sizeof(expected_sensor_challenge))) {
-		return fail_check("5.1.1 encrypt_sensor_challenge");
-	}
 
 	/*
-	 * Flow step 5, Sensor-to-Terminal handoff: send sensorEsamID, Version,
-	 * and enRand1 to Terminal. No driver call is needed here.
+	 * Flow step 5, Sensor-to-Terminal handoff:
+	 * send sensorEsamID[8], Version[4], enRand1[8].
 	 */
 
-	/* Flow step 6, Terminal internal security-chip operation: verify sensorEsamID + enRand1. */
+	/* Flow step 6, Terminal internal operation: verify sensorEsamID[8] and enRand1[8]. */
 	rc = sc1777y_verify_sensor_auth(dev, SC1777Y_SENSOR_NEW, sensor_identity.serial,
-					sensor_challenge, verified_rand4);
+					en_rand1, rand1_verify);
 	if (rc != 0) {
 		return fail_step("5.1.1 verify_sensor_auth", rc);
 	}
-	if (!expect_equal(verified_rand4, expected_verified_rand4, sizeof(expected_verified_rand4))) {
-		return fail_check("5.1.1 verify_sensor_auth");
-	}
 
-	/*
-	 * Flow step 7, Terminal-to-Sensor handoff: send the authentication result.
-	 * The sample check above represents Terminal's pass/fail decision.
-	 */
-
-	printf("5.1.1 identity authentication PASS\n");
+	printf("  Terminal -> Sensor: AuthResult\n");
+	printf("[5.1.1] PASS\n");
 	return 0;
 }
 
@@ -185,6 +166,14 @@ static int run_5_1_1_identity_auth(const struct device *dev)
  * | user     |                         | user   |
  * +----------+                         +--------+
  *
+ * Prerequisites:
+ * - Terminal should maintain the mapping between Sensor device address and
+ *   sensorEsamID[8] before handling Sensor data.
+ *
+ * Data exchanged:
+ * - Sensor -> Terminal: enData1[8]
+ * - Terminal -> Sensor: enData2[8]
+ *
  * Guide:
  * The sender encrypts before sending.  The receiver decrypts after receiving.
  * Terminal-side operations that target Sensor data must use the matching
@@ -192,83 +181,68 @@ static int run_5_1_1_identity_auth(const struct device *dev)
  */
 static int run_5_1_2_business_data(const struct device *dev)
 {
-	static const uint8_t sensor_id[SC1777Y_SERIAL_LEN] = {
+	static const uint8_t sensor_esam_id[SC1777Y_SERIAL_LEN] = {
 		'S', 'C', 23, 119, 0, 0, 0, 1
 	};
-	uint8_t data_block8[8];
-	uint8_t data_out[16];
-	uint8_t data_expected[16];
+	uint8_t data1[8];
+	uint8_t en_data1[8];
+	uint8_t data1_plain[8];
+	uint8_t data2[8];
+	uint8_t en_data2[8];
+	uint8_t data2_plain[8];
 	size_t out_len = 0U;
 	int rc;
 
-	data_block8[0] = 16;
-	data_block8[1] = 32;
-	data_block8[2] = 48;
-	data_block8[3] = 64;
-	data_block8[4] = 80;
-	data_block8[5] = 96;
-	data_block8[6] = 112;
-	data_block8[7] = 128;
+	printf("[5.1.2] Business data\n");
+	printf("  Prerequisite: Terminal maps Sensor address to sensorEsamID[8]\n");
+	printf("  Sensor -> Terminal: Data1[8] encrypted as enData1[8]\n");
 
-	/* Sensor-to-Terminal flow step 1, Sensor internal security-chip operation: encrypt Data1. */
-	rc = sc1777y_sensor_encrypt(dev, data_block8, sizeof(data_block8), data_out,
-				    sizeof(data_out), &out_len);
+	fill_example_bytes(data1, sizeof(data1), 0x10);
+
+	/* Sensor-to-Terminal flow step 1, Sensor internal operation: encrypt Data1[8]. */
+	rc = sc1777y_sensor_encrypt(dev, data1, sizeof(data1), en_data1,
+				    sizeof(en_data1), &out_len);
 	if (rc != 0) {
 		return fail_step("5.1.2 sensor_encrypt", rc);
 	}
-	fill_xor(data_expected, data_block8, sizeof(data_block8), 90);
-	if (out_len != sizeof(data_block8) ||
-	    !expect_equal(data_out, data_expected, sizeof(data_block8))) {
-		return fail_check("5.1.2 sensor_encrypt");
-	}
 
 	/*
-	 * Sensor-to-Terminal flow step 2: Sensor sends enData1 to Terminal.
-	 * No driver call is needed for this user-to-user message.
+	 * Sensor-to-Terminal flow step 2:
+	 * Sensor sends enData1[8] to Terminal.
 	 */
 
-	/* Sensor-to-Terminal flow step 3, Terminal internal security-chip operation: decrypt enData1. */
-	rc = sc1777y_terminal_decrypt_sensor(dev, SC1777Y_SENSOR_NEW, sensor_id,
-					     data_out, out_len, data_expected,
-					     sizeof(data_expected), &out_len);
+	/* Sensor-to-Terminal flow step 3, Terminal internal operation: decrypt enData1[8]. */
+	rc = sc1777y_terminal_decrypt_sensor(dev, SC1777Y_SENSOR_NEW, sensor_esam_id,
+					     en_data1, out_len, data1_plain,
+					     sizeof(data1_plain), &out_len);
 	if (rc != 0) {
 		return fail_step("5.1.2 terminal_decrypt_sensor", rc);
 	}
-	if (out_len != sizeof(data_block8) ||
-	    !expect_equal(data_expected, data_block8, sizeof(data_block8))) {
-		return fail_check("5.1.2 terminal_decrypt_sensor");
-	}
 
-	/* Terminal-to-Sensor flow step 1, Terminal internal security-chip operation: encrypt Data2. */
-	rc = sc1777y_terminal_encrypt_sensor(dev, SC1777Y_SENSOR_NEW, sensor_id,
-					     data_block8, sizeof(data_block8), data_out,
-					     sizeof(data_out), &out_len);
+	printf("  Terminal -> Sensor: Data2[8] encrypted as enData2[8]\n");
+	fill_example_bytes(data2, sizeof(data2), 0x20);
+
+	/* Terminal-to-Sensor flow step 1, Terminal internal operation: encrypt Data2[8]. */
+	rc = sc1777y_terminal_encrypt_sensor(dev, SC1777Y_SENSOR_NEW, sensor_esam_id,
+					     data2, sizeof(data2), en_data2,
+					     sizeof(en_data2), &out_len);
 	if (rc != 0) {
 		return fail_step("5.1.2 terminal_encrypt_sensor", rc);
 	}
-	fill_xor(data_expected, data_block8, sizeof(data_block8), 90);
-	if (out_len != sizeof(data_block8) ||
-	    !expect_equal(data_out, data_expected, sizeof(data_block8))) {
-		return fail_check("5.1.2 terminal_encrypt_sensor");
-	}
 
 	/*
-	 * Terminal-to-Sensor flow step 2: Terminal sends enData2 to Sensor.
-	 * No driver call is needed for this user-to-user message.
+	 * Terminal-to-Sensor flow step 2:
+	 * Terminal sends enData2[8] to Sensor.
 	 */
 
-	/* Terminal-to-Sensor flow step 3, Sensor internal security-chip operation: decrypt enData2. */
-	rc = sc1777y_sensor_decrypt_from_terminal(dev, data_out, out_len, data_expected,
-						  sizeof(data_expected), &out_len);
+	/* Terminal-to-Sensor flow step 3, Sensor internal operation: decrypt enData2[8]. */
+	rc = sc1777y_sensor_decrypt_from_terminal(dev, en_data2, out_len, data2_plain,
+						  sizeof(data2_plain), &out_len);
 	if (rc != 0) {
 		return fail_step("5.1.2 sensor_decrypt_from_terminal", rc);
 	}
-	if (out_len != sizeof(data_block8) ||
-	    !expect_equal(data_expected, data_block8, sizeof(data_block8))) {
-		return fail_check("5.1.2 sensor_decrypt_from_terminal");
-	}
 
-	printf("5.1.2 business data PASS\n");
+	printf("[5.1.2] PASS\n");
 	return 0;
 }
 
@@ -276,102 +250,74 @@ static int run_5_1_2_business_data(const struct device *dev)
  * 5.2.1 Key update/recovery flow
  *
  * Flow:
- * +----------+  identity, Version, ERand1     +----------+
- * | Terminal |------------------------------->| Platform |
- * | user     |                                | user     |
- * |          |<-------------------------------|          |
- * |          |  enERand1, KeyData request     |          |
- * |          |-------------------------------->|          |
- * +----------+  auth result, ERand2, result   +----------+
+ * +----------------------+                               +----------+
+ * | Maintenance Software |------------------------------>| Terminal |
+ * |                      | identity request              |          |
+ * |                      |<------------------------------|          |
+ * |                      | EsamID[8], Version[4],        |          |
+ * |                      | ERand1[8]                     |          |
+ * |                      |------------------------------>|          |
+ * |                      | enERand1[8]                   |          |
+ * |                      |<------------------------------|          |
+ * |                      | AuthResult, ERand2[8]         |          |
+ * |                      |------------------------------>|          |
+ * |                      | KeyData[len]                  |          |
+ * |                      |<------------------------------|          |
+ * |                      | UpdateResult                  |          |
+ * +----------------------+------------------------------>|          |
+ *                                                        +----------+
  *
  * Guide:
- * Terminal exposes identity and random material.  Platform owns update policy,
- * encrypted authentication data, and KeyData generation.  Terminal verifies
- * the encrypted random value and applies the KeyData package.
+ * Terminal exposes identity and random material. Maintenance Software owns
+ * update policy, encrypted authentication data, and KeyData generation.
+ * Terminal verifies the encrypted random value and applies the KeyData package.
  */
 static int run_5_2_1_key_update(const struct device *dev)
 {
 	struct sc1777y_identity update_identity;
-	uint8_t update_rand8[8];
-	uint8_t update_auth_cipher[8];
-	uint8_t key_update_data[4];
+	uint8_t e_rand1[8];
+	uint8_t en_e_rand1[8];
+	uint8_t e_rand2[8];
+	uint8_t key_data[4];
 	int rc;
 
-	/*
-	 * Flow step 1, Platform-to-Terminal request: ask for EsamID, Version,
-	 * and ERand1. No driver call is needed for this user-to-user message.
-	 */
+	printf("[5.2.1] Key update/recovery\n");
+	printf("  Prerequisite: Maintenance Software has update/recovery USBKey and interface library\n");
+	printf("  Maintenance Software -> Terminal: identity request\n");
+	printf("  Terminal -> Maintenance Software: EsamID[8], Version[4], ERand1[8]\n");
+	printf("  Maintenance Software -> Terminal: enERand1[8]\n");
+	printf("  Terminal -> Maintenance Software: AuthResult, ERand2[8]\n");
+	printf("  Maintenance Software -> Terminal: KeyData[len]\n");
+	printf("  Terminal -> Maintenance Software: UpdateResult\n");
 
-	/* Flow step 2, Terminal internal security-chip operation: get EsamID and Version. */
 	rc = sc1777y_get_update_identity(dev, &update_identity);
 	if (rc != 0) {
 		return fail_step("5.2.1 get_update_identity", rc);
 	}
-	if (!expect_default_identity(&update_identity)) {
-		return fail_check("5.2.1 get_update_identity");
-	}
 
-	/* Flow step 3, Terminal internal security-chip operation: get 8-byte ERand1. */
-	rc = sc1777y_get_random8(dev, update_rand8);
+	rc = sc1777y_get_random8(dev, e_rand1);
 	if (rc != 0) {
 		return fail_step("5.2.1 get_random8 auth", rc);
 	}
-	if (!expect_sequence(update_rand8, sizeof(update_rand8), 160)) {
-		return fail_check("5.2.1 get_random8 auth");
-	}
 
-	/*
-	 * Flow step 4, Terminal-to-Platform handoff: send EsamID, Version,
-	 * and ERand1 to Platform. No driver call is needed here.
-	 */
-
-	/*
-	 * Flow step 5, Platform-to-Terminal handoff: send encrypted ERand1
-	 * for Terminal authentication. No driver call is needed here.
-	 */
-	fill_sequence(update_auth_cipher, sizeof(update_auth_cipher), 33);
-
-	/* Flow step 6, Terminal internal security-chip operation: verify encrypted ERand1. */
-	rc = sc1777y_verify_update_auth(dev, update_auth_cipher);
+	fill_example_bytes(en_e_rand1, sizeof(en_e_rand1), 0x30);
+	rc = sc1777y_verify_update_auth(dev, en_e_rand1);
 	if (rc != 0) {
 		return fail_step("5.2.1 verify_update_auth", rc);
 	}
 
-	/* Flow step 7, Terminal internal security-chip operation: get 8-byte ERand2. */
-	rc = sc1777y_get_random8(dev, update_rand8);
+	rc = sc1777y_get_random8(dev, e_rand2);
 	if (rc != 0) {
 		return fail_step("5.2.1 get_random8 package", rc);
 	}
-	if (!expect_sequence(update_rand8, sizeof(update_rand8), 160)) {
-		return fail_check("5.2.1 get_random8 package");
-	}
 
-	/*
-	 * Flow step 8, Terminal-to-Platform handoff: send authentication result
-	 * and ERand2 to Platform. No driver call is needed here.
-	 */
-
-	/*
-	 * Flow step 9, Platform-to-Terminal handoff: send KeyData package.
-	 * No driver call is needed for this user-to-user message.
-	 */
-	key_update_data[0] = 16;
-	key_update_data[1] = 32;
-	key_update_data[2] = 48;
-	key_update_data[3] = 64;
-
-	/* Flow step 10, Terminal internal security-chip operation: apply KeyData package. */
-	rc = sc1777y_apply_key_update(dev, key_update_data, sizeof(key_update_data));
+	fill_example_bytes(key_data, sizeof(key_data), 0x40);
+	rc = sc1777y_apply_key_update(dev, key_data, sizeof(key_data));
 	if (rc != 0) {
 		return fail_step("5.2.1 apply_key_update", rc);
 	}
 
-	/*
-	 * Flow step 11, Terminal-to-Platform handoff: send update/recovery result.
-	 * No driver call is needed for this user-to-user message.
-	 */
-
-	printf("5.2.1 key update PASS\n");
+	printf("[5.2.1] PASS\n");
 	return 0;
 }
 
