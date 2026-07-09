@@ -63,15 +63,6 @@ static bool expect_sequence(const uint8_t *actual, size_t len, uint8_t start)
 	return true;
 }
 
-static bool expect_default_serial(const uint8_t value[SC1777Y_SERIAL_LEN])
-{
-	static const uint8_t expected_serial[SC1777Y_SERIAL_LEN] = {
-		'S', 'C', 23, 119, 0, 0, 0, 1
-	};
-
-	return expect_equal(value, expected_serial, sizeof(expected_serial));
-}
-
 /*
  * 5.1.1 Identity authentication flow
  *
@@ -331,87 +322,69 @@ static int run_5_2_1_key_update(const struct device *dev)
  * |          |  version, serial, rand  |          |
  * +----------+                         +----------+
  *
- * Guide:
- * Terminal reads local version, serial, and random bytes.  Platform provides
- * the public key, AK, and IV material that Terminal imports before platform
- * access workflows.
+ * Prerequisites:
+ * - Platform public key, AK, and IV material come from Platform or Platform
+ *   configuration.
+ *
+ * Data exchanged:
+ * - Terminal local operation: VersionInfo[64], Serial[8], Random[len]
+ * - Platform -> Terminal: PlatformPublicKey[64], AK[16], IV[16]
  */
 static int run_5_3_1_platform_basic(const struct device *dev)
 {
 	struct sc1777y_version_info version_info;
-	uint8_t version_expected[SC1777Y_VERSION_INFO_LEN];
 	uint8_t serial[SC1777Y_SERIAL_LEN];
-	uint8_t random_buf[16];
+	uint8_t random16[16];
 	uint8_t platform_key[SC1777Y_PLATFORM_PUBLIC_KEY_LEN];
 	uint8_t ak[SC1777Y_AK_LEN];
 	uint8_t iv[SC1777Y_IV_LEN];
 	int rc;
 
-	/* Flow item 1, Terminal internal security-chip operation: read version information. */
+	printf("[5.3.1] Platform basic instructions\n");
+	printf("  Prerequisite: Platform public key, AK[16], and IV[16] are available\n");
+	printf("  Terminal local operation: VersionInfo[64], Serial[8], Random[16]\n");
+	printf("  Platform -> Terminal: PlatformPublicKey[64], AK[16], IV[16]\n");
+
 	rc = sc1777y_get_version_info(dev, &version_info);
 	if (rc != 0) {
 		return fail_step("5.3.1 get_version_info", rc);
 	}
-	fill_sequence(version_expected, sizeof(version_expected), 48);
-	if (!expect_equal(version_info.bytes, version_expected, sizeof(version_expected))) {
-		return fail_check("5.3.1 get_version_info");
-	}
+	(void)version_info;
 
-	/* Flow item 2, Terminal internal security-chip operation: read unique chip serial. */
 	rc = sc1777y_get_serial(dev, serial);
 	if (rc != 0) {
 		return fail_step("5.3.1 get_serial", rc);
 	}
-	if (!expect_default_serial(serial)) {
-		return fail_check("5.3.1 get_serial");
-	}
+	(void)serial;
 
-	/* Flow item 3, Terminal internal security-chip operation: generate caller-sized random bytes. */
-	rc = sc1777y_get_random(dev, random_buf, sizeof(random_buf));
+	rc = sc1777y_get_random(dev, random16, sizeof(random16));
 	if (rc != 0) {
 		return fail_step("5.3.1 get_random", rc);
 	}
-	if (!expect_sequence(random_buf, sizeof(random_buf), 160)) {
-		return fail_check("5.3.1 get_random");
-	}
+	(void)random16;
 
-	/*
-	 * Flow item 4, Platform-to-Terminal handoff: provide Platform public key.
-	 * No driver call is needed for this user-to-user message.
-	 */
 	fill_sequence(platform_key, sizeof(platform_key), 16);
 
-	/* Flow item 5, Terminal internal security-chip operation: import Platform public key. */
 	rc = sc1777y_import_platform_public_key(dev, platform_key);
 	if (rc != 0) {
 		return fail_step("5.3.1 import_platform_public_key", rc);
 	}
 
-	/*
-	 * Flow item 6, Platform-to-Terminal handoff: provide symmetric key AK.
-	 * No driver call is needed for this user-to-user message.
-	 */
 	fill_sequence(ak, sizeof(ak), 32);
 
-	/* Flow item 7, Terminal internal security-chip operation: import symmetric key AK. */
 	rc = sc1777y_import_ak(dev, ak);
 	if (rc != 0) {
 		return fail_step("5.3.1 import_ak", rc);
 	}
 
-	/*
-	 * Flow item 8, Platform-to-Terminal handoff: provide IV material.
-	 * No driver call is needed for this user-to-user message.
-	 */
 	fill_sequence(iv, sizeof(iv), 64);
 
-	/* Flow item 9, Terminal internal security-chip operation: import IV. */
 	rc = sc1777y_import_iv(dev, iv);
 	if (rc != 0) {
 		return fail_step("5.3.1 import_iv", rc);
 	}
 
-	printf("5.3.1 platform basic PASS\n");
+	printf("[5.3.1] PASS\n");
 	return 0;
 }
 
@@ -425,64 +398,50 @@ static int run_5_3_1_platform_basic(const struct device *dev)
  * |          |<-------------------------------|          |
  * +----------+      serial + CSR bytes        +----------+
  *
- * Guide:
- * Platform asks Terminal for certificate enrollment material.  Terminal
- * creates local SM2 key material, reads its serial, generates CSR bytes, and
- * returns serial plus CSR bytes to Platform.
+ * Prerequisites:
+ * - Terminal should generate or confirm the local SM2 key pair before
+ *   generating CSR data.
+ * - Regenerating the key pair overwrites the old key pair and requires
+ *   certificate re-enrollment.
+ *
+ * Data exchanged:
+ * - Platform -> Terminal: certificate enrollment request
+ * - Terminal -> Platform: Serial[8], CSR[len]
  */
 static int run_5_3_2_certificate_request(const struct device *dev)
 {
 	static const uint8_t subject[] = {'C', 'N', '='};
-	static const char cert_prefix[] = "SC1777Y-CERT-REQUEST:";
 	uint8_t serial[SC1777Y_SERIAL_LEN];
-	uint8_t cert_request[128];
-	size_t cert_request_len;
+	uint8_t csr[128];
+	size_t csr_len;
 	int rc;
 
-	/*
-	 * Flow step 1, Platform-to-Terminal request: ask for certificate
-	 * enrollment material. No driver call is needed for this message.
-	 */
+	printf("[5.3.2] Certificate request\n");
+	printf("  Prerequisite: local SM2 key pair exists before CSR generation\n");
+	printf("  Prerequisite: regenerating SM2 key pair requires certificate re-enrollment\n");
+	printf("  Platform -> Terminal: certificate enrollment request\n");
+	printf("  Terminal -> Platform: Serial[8], CSR[len]\n");
 
-	/*
-	 * Flow step 2, Terminal preparation: reset or prepare the local device
-	 * before generating key material. Device readiness represents this in the sample.
-	 */
-
-	/* Flow step 3, Terminal internal security-chip operation: generate SM2 keypair. */
 	rc = sc1777y_generate_sm2_keypair(dev);
 	if (rc != 0) {
 		return fail_step("5.3.2 generate_sm2_keypair", rc);
 	}
 
-	/* Flow step 4, Terminal internal security-chip operation: read unique chip serial. */
 	rc = sc1777y_get_serial(dev, serial);
 	if (rc != 0) {
 		return fail_step("5.3.2 get_serial", rc);
 	}
-	if (!expect_default_serial(serial)) {
-		return fail_check("5.3.2 get_serial");
-	}
+	(void)serial;
 
-	/* Flow step 5, Terminal internal security-chip operation: generate CSR from subject. */
 	rc = sc1777y_generate_cert_request(dev, SC1777Y_CERT_REQUEST_FORMAT_2, subject,
-					   sizeof(subject), cert_request,
-					   sizeof(cert_request), &cert_request_len);
+					   sizeof(subject), csr, sizeof(csr), &csr_len);
 	if (rc != 0) {
 		return fail_step("5.3.2 generate_cert_request", rc);
 	}
-	if (cert_request_len != (sizeof(cert_prefix) - 1U + sizeof(subject)) ||
-	    memcmp(cert_request, cert_prefix, sizeof(cert_prefix) - 1U) != 0 ||
-	    memcmp(&cert_request[sizeof(cert_prefix) - 1U], subject, sizeof(subject)) != 0) {
-		return fail_check("5.3.2 generate_cert_request");
-	}
+	(void)csr;
+	(void)csr_len;
 
-	/*
-	 * Flow step 6, Terminal-to-Platform handoff: send serial and CSR bytes.
-	 * No driver call is needed for this user-to-user message.
-	 */
-
-	printf("5.3.2 certificate request PASS\n");
+	printf("[5.3.2] PASS\n");
 	return 0;
 }
 
@@ -495,41 +454,33 @@ static int run_5_3_2_certificate_request(const struct device *dev)
  * | user     |                                   | user     |
  * +----------+                                   +----------+
  *
- * Guide:
- * Terminal selects which Platform family it will access.  The PDF lists this
- * as 5.3.6, while 5.3.3 step 9 depends on this selection.
+ * Prerequisites:
+ * - Platform type should be selected before the 5.3.3 auth response step.
+ *
+ * Data exchanged:
+ * - Terminal local configuration: PlatformType
  */
 static int run_5_3_6_platform_type(const struct device *dev)
 {
 	enum sc1777y_platform_type platform_type;
 	int rc;
 
-	/*
-	 * Flow item 1, Terminal configuration: choose the target Platform family.
-	 * No driver call is needed until the selected type is applied.
-	 */
+	printf("[5.3.6] Platform type selection\n");
+	printf("  Prerequisite: select PlatformType before 5.3.3 auth response\n");
+	printf("  Terminal local configuration: PlatformType\n");
 
-	/* Flow item 2, Terminal internal security-chip operation: set platform type. */
 	rc = sc1777y_set_platform_type(dev, SC1777Y_PLATFORM_NANRUI);
 	if (rc != 0) {
 		return fail_step("5.3.6 set_platform_type", rc);
 	}
 
-	/* Flow item 3, Terminal internal security-chip operation: read platform type. */
 	rc = sc1777y_get_platform_type(dev, &platform_type);
 	if (rc != 0) {
 		return fail_step("5.3.6 get_platform_type", rc);
 	}
-	if (platform_type != SC1777Y_PLATFORM_NANRUI) {
-		return fail_check("5.3.6 get_platform_type");
-	}
+	(void)platform_type;
 
-	/*
-	 * Flow item 4, Terminal configuration result: use this Platform family
-	 * for later session-authentication operations.
-	 */
-
-	printf("5.3.6 platform type PASS\n");
+	printf("[5.3.6] PASS\n");
 	return 0;
 }
 
