@@ -30,6 +30,7 @@ struct sc1777y_emul_data {
 	size_t fixed_response_len;
 	bool response_ready;
 	bool corrupt_next_response_lrc;
+	bool response_lrc_corrupted;
 	bool fixed_response_valid;
 	bool next_status_valid;
 	uint8_t next_status_sw1;
@@ -653,9 +654,11 @@ static void sc1777y_emul_prepare_response(struct sc1777y_emul_data *data)
 	data->response_len = 4U + payload_len + 1U;
 	data->response[data->response_len - 1U] =
 		sc1777y_emul_lrc(data->response, 4U + payload_len);
+	data->response_lrc_corrupted = false;
 	if (data->corrupt_next_response_lrc) {
 		data->response[data->response_len - 1U] ^= 0xFFU;
 		data->corrupt_next_response_lrc = false;
+		data->response_lrc_corrupted = true;
 	}
 
 	data->response_offset = 0U;
@@ -679,6 +682,19 @@ static int sc1777y_emul_io(const struct emul *target, const struct spi_config *c
 		data->command_count++;
 		sc1777y_emul_prepare_response(data);
 		return 0;
+	}
+
+	/* A query after the complete response models a receive-only retry. */
+	if (rx_bufs != NULL && rx_bufs->count == 1U && rx_bufs->buffers[0].len == 1U &&
+	    data->response_ready && data->response_offset == data->response_len &&
+	    data->response_len > 0U) {
+		if (data->response_lrc_corrupted) {
+			data->response[data->response_len - 1U] ^= 0xFFU;
+			data->response_lrc_corrupted = false;
+		}
+		data->response_offset = 0U;
+		data->ready_polls_remaining = data->ready_delay;
+		data->response_ready = false;
 	}
 
 	if (rx_bufs != NULL && rx_bufs->count == 1U && rx_bufs->buffers[0].len == 1U &&

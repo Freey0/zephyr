@@ -95,6 +95,15 @@ ZTEST_F(sc1777y, test_apply_key_update_sends_802202010004)
 	zassert_equal(sizeof(expected_frame), frame_len);
 }
 
+ZTEST_F(sc1777y, test_apply_key_update_does_not_resend_after_response_lrc_error)
+{
+	const uint8_t key_data[] = {0x10, 0x20, 0x30, 0x40};
+
+	sc1777y_emul_corrupt_next_response_lrc(fixture->emul);
+	zassert_ok(sc1777y_apply_key_update(fixture->dev, key_data, sizeof(key_data)));
+	zassert_equal(1, sc1777y_emul_get_command_count(fixture->emul));
+}
+
 ZTEST_F(sc1777y, test_apply_key_update_accepts_max_payload)
 {
 	uint8_t key_data[SC1777Y_MAX_DATA_LEN];

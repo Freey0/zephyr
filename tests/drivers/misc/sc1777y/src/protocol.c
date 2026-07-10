@@ -122,15 +122,20 @@ ZTEST_F(sc1777y, test_emulator_records_response_without_extra_ready_header_byte)
 	zassert_equal(test_lrc(response, response_len - 1U), response[response_len - 1U]);
 }
 
-ZTEST_F(sc1777y, test_command_retries_after_response_lrc_error)
+ZTEST_F(sc1777y, test_command_restarts_receive_after_response_lrc_error)
 {
 	const struct sc1777y_command cmd = {.cla = 0x00, .ins = 0x84, .p1 = 0x00, .p2 = 0x04};
 	uint8_t out[4];
 	size_t out_len;
+	uint8_t response[9];
+	size_t response_len;
 
 	sc1777y_emul_corrupt_next_response_lrc(fixture->emul);
 	zassert_ok(sc1777y_command(fixture->dev, &cmd, out, sizeof(out), &out_len, NULL));
-	zassert_equal(2, sc1777y_emul_get_command_count(fixture->emul));
+	zassert_equal(1, sc1777y_emul_get_command_count(fixture->emul));
+	zassert_ok(sc1777y_emul_get_last_response(fixture->emul, response, sizeof(response),
+						 &response_len));
+	zassert_equal(test_lrc(response, response_len - 1U), response[response_len - 1U]);
 }
 
 ZTEST_F(sc1777y, test_command_retries_after_6a90_status)

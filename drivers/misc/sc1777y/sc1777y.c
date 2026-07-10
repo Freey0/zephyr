@@ -464,12 +464,12 @@ static int sc1777y_command_locked(const struct device *dev, const struct sc1777y
 	cfg = dev->config;
 	*out_len = 0U;
 
-	for (int attempt = 0; attempt < SC1777Y_MAX_RETRIES; attempt++) {
-		ret = sc1777y_write_frame(&cfg->bus, data->frame, frame_len);
-		if (ret != 0) {
-			return ret;
-		}
+	ret = sc1777y_write_frame(&cfg->bus, data->frame, frame_len);
+	if (ret != 0) {
+		return ret;
+	}
 
+	for (int attempt = 0; attempt < SC1777Y_MAX_RETRIES; attempt++) {
 		ret = sc1777y_poll_ready(&cfg->bus);
 		if (ret != 0) {
 			return ret;
@@ -478,6 +478,7 @@ static int sc1777y_command_locked(const struct device *dev, const struct sc1777y
 		ret = sc1777y_read_response(&cfg->bus, data->response, sizeof(data->response),
 					    &response_len, &local_status);
 		if (ret == -EBADMSG) {
+			/* Restart query/receive without retransmitting the command. */
 			continue;
 		}
 		if (ret != 0) {
@@ -504,6 +505,10 @@ static int sc1777y_command_locked(const struct device *dev, const struct sc1777y
 
 		if (local_status.sw1 == 0x6A && local_status.sw2 == 0x90 &&
 		    attempt + 1 < SC1777Y_MAX_RETRIES) {
+			ret = sc1777y_write_frame(&cfg->bus, data->frame, frame_len);
+			if (ret != 0) {
+				return ret;
+			}
 			continue;
 		}
 
