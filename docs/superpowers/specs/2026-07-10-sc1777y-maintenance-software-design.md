@@ -481,10 +481,10 @@ SMP v2 管理组错误码：
 
 ## SC1777Y emulator 行为
 
-真实密码算法仍然不属于 emulator。为让端到端维护软件能观察更新效果，emulator 在成功
-处理 `sc1777y_apply_key_update()` 命令后，把模拟 `Version[4]` 视为大端 32 位无符号数
-并加一，溢出时按 2^32 回绕。初值 `01 02 03 00` 因而变为 `01 02 03 01`。随后
-`sc1777y_get_update_identity()` 返回新值。该行为只证明软件交互和状态刷新，不代表真实
+真实密码算法仍然不属于 emulator。emulator 按文档接受合法的
+`sc1777y_apply_key_update()` 命令并返回成功状态，但不虚构文档未定义的密钥状态变化，也
+不修改模拟 `Version[4]`。后续 `sc1777y_get_update_identity()` 继续返回确定性 fixture
+身份，且 `Version[4]` 最后一个字节保持为 `0x00`。该行为只证明软件交互，不代表真实
 KeyData 的密码学有效性。
 
 维护认证顺序由 MCUmgr 管理组状态机强制执行，不依赖当前较宽松的 emulator 流程状态。
@@ -667,8 +667,8 @@ PySide6 采用 LGPL-3.0-only、GPL 或商业许可。发布二进制产品前必
 
 ### SC1777Y 驱动与 emulator
 
-- 验证成功 apply 后，下一次 update identity 返回递增的模拟 Version[4]。
-- 验证 fixture reset 后版本恢复初值。
+- 验证成功 apply 后，下一次 update identity 仍返回确定性 fixture Version[4]，且最后一个
+  字节保持为 `0x00`。
 - 保持现有协议帧和全部公共 API 测试通过。
 
 ### 管理组 ztest
@@ -715,7 +715,7 @@ Twister pytest harness 启动 `native_sim`，从控制台匹配 uart1 的 `/dev/
 - 模拟 USBKey 的完整 5.2.1 流程；
 - AuthResult 和 UpdateResult；
 - 2048 字节 KeyData 分块；
-- 成功后 Version[4] 变化；
+- 成功后重新读取 diagnostics，Version[4] 保持文档约束的确定性值；
 - 认证失败后没有 KeyData 命令；
 - 重连与 status 查询。
 
@@ -732,7 +732,8 @@ PTY 端到端仅在 Linux 执行。纯 Python 核心和 offscreen GUI 测试在 
 - AuthResult=false 时没有 ERand2、KeyData 生成、上传或 commit。
 - KeyData 最大 2048 字节，分块传输、偏移和整包 CRC32 都受到验证。
 - commit 不会因客户端重试而对同一事务调用两次芯片更新。
-- 更新成功后重新诊断显示模拟 Version[4] 变化。
+- 更新成功后可以重新读取诊断，模拟 Version[4] 不因 apply 被修改，且最后一个字节保持为
+  `0x00`。
 - GUI 在所有串口、USBKey 和更新操作期间保持响应。
 - 仿真 USBKey 不能连接 simulation=false 的终端执行更新。
 - 日志不包含 ERand、enERand1、KeyData 或原始敏感包。
