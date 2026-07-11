@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright The Zephyr Project Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  net.lib.sc1777y_secure_mqtt_transport.unit:
+    integration_platforms:
+      - native_sim
+    platform_allow:
+      - native_sim
+    tags:
+      - net
+      - mqtt
+      - sc1777y
