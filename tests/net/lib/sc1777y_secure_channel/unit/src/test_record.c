@@ -180,6 +180,28 @@ ZTEST(sc1777y_secure_record, test_blocking_recv_timeout_fails_channel)
 	expect_blocking_record_timeout(TEST_GATEWAY_RECORD_PARTIAL_STALL, 7U);
 }
 
+ZTEST(sc1777y_secure_record, test_blocking_send_timeout_fails_channel)
+{
+	int ret = 0;
+
+	fill_input(SC1777Y_SECURE_MAX_PLAINTEXT_CHUNK);
+	test_gateway_start(&gateway, TEST_GATEWAY_RECORD_SEND_STALL);
+	connect_channel_with_timeout(20);
+	for (size_t i = 0U; (i < 128U) && (ret == 0); ++i) {
+		ret = sc1777y_secure_channel_send(
+			&channel, input, SC1777Y_SECURE_MAX_PLAINTEXT_CHUNK);
+	}
+
+	zassert_equal(-ETIMEDOUT, ret);
+	zassert_equal(SC1777Y_SECURE_CHANNEL_FAILED,
+		      sc1777y_secure_channel_get_state(&channel));
+	zassert_equal(-1, channel.socket_fd);
+	zassert_mem_equal(channel.tx_work, zero_tx_work, sizeof(channel.tx_work));
+	zassert_mem_equal(channel.rx_record, zero_rx_record, sizeof(channel.rx_record));
+	zassert_mem_equal(channel.plain_cache, zero_plain_cache, sizeof(channel.plain_cache));
+	test_gateway_wait(&gateway);
+}
+
 ZTEST(sc1777y_secure_record, test_recv_separates_coalesced_records)
 {
 	const size_t len = SC1777Y_SECURE_MAX_PLAINTEXT_CHUNK + 3U;

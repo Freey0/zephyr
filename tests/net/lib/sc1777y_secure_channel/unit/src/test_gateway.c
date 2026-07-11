@@ -387,6 +387,11 @@ static int run_gateway(struct test_gateway *gateway)
 	if (ret < 0) {
 		goto out;
 	}
+	if (gateway->mode == TEST_GATEWAY_RECORD_SEND_STALL) {
+		k_msleep(250);
+		ret = 0;
+		goto out;
+	}
 
 	if (gateway->mode == TEST_GATEWAY_RECORD_ECHO) {
 		ret = run_record_echo(gateway, client_fd, request, sizeof(request));
