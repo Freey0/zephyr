@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright The Zephyr Project Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  net.lib.sc1777y_secure_mqtt_transport.e2e:
+    harness: console
+    harness_config:
+      type: one_line
+      regex:
+        - "MQTT_SECURE_E2E_PASS"
+    integration_platforms:
+      - native_sim
+    platform_allow:
+      - native_sim
+    tags:
+      - net
+      - mqtt
+      - sc1777y
+    timeout: 60
