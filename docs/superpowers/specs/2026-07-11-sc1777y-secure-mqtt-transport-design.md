@@ -23,13 +23,15 @@
 ### 2.1 本次范围
 
 - 只实现终端侧。
-- 实现安全接入协议、SC1777Y 调用、TCP 安全通道和 MQTT custom transport。
+- 功能一：实现完整安全通信库，负责 TCP 连接、安全接入协议和 SC1777Y 公共
+  驱动 API 调用。
+- 功能二：在安全通信库之上实现 MQTT custom transport 薄包装。
 - 终端连接主站安全接入端点，不直接连接后端 MQTT Broker。
 - 运行期使用预置终端证书、平台公钥、SIM 和设备 ID。
 - native_sim 通过 TAP 接口运行完整 Zephyr TCP/IP 网络栈。
 - 端到端测试是默认必跑门禁。
-- 主站侧由宿主机脚本模拟安全接入网关；网关脚本连接本地真实 Mosquitto Broker
-  并透明转发，不实现 BrokerStub。
+- 主站侧由宿主机脚本模拟安全接入网关；第一阶段端到端测试透明连接 TCP echo
+  服务，第二阶段端到端测试透明连接本地真实 Mosquitto Broker，不实现 BrokerStub。
 - native_sim 的 SC1777Y emulator 和主站脚本使用配套的确定性密码模型。
 
 ### 2.2 非目标
@@ -89,7 +91,6 @@ subsys/net/lib/sc1777y_secure_channel/
 |- CMakeLists.txt
 |- Kconfig
 |- secure_channel.c
-|- io.h
 |- protocol.c
 |- handshake.c
 |- record.c
@@ -100,7 +101,6 @@ subsys/net/lib/sc1777y_secure_channel/
 职责如下：
 
 - `secure_channel.c`：公共生命周期、状态和同步控制。
-- `io.h`：子系统私有字节流后端接口；生产绑定 socket，测试绑定脚本后端。
 - `protocol.c`：Type、Subtype、Len 和固定字段的编解码，不访问 socket 或芯片。
 - `handshake.c`：三步会话协商及 SC1777Y 会话类 API 调用。
 - `record.c`：填充、去填充、分片、IV 和会话数据加解密。
@@ -109,16 +109,14 @@ subsys/net/lib/sc1777y_secure_channel/
 
 建议 Kconfig：
 
-- `CONFIG_SC1777Y_SECURE_CHANNEL`：启用安全通道核心，依赖 SC1777Y。
-- `CONFIG_SC1777Y_SECURE_CHANNEL_SOCKET`：启用生产 socket 后端，依赖
-  SC1777Y_SECURE_CHANNEL 和 NET_SOCKETS。
+- `CONFIG_SC1777Y_SECURE_CHANNEL`：启用包含 TCP 后端的完整安全通信库，依赖
+  SC1777Y 和 NET_SOCKETS。
 - `CONFIG_SC1777Y_SECURE_CHANNEL_MQTT`：启用 MQTT 薄适配，依赖
-  SC1777Y_SECURE_CHANNEL_SOCKET、MQTT_LIB 和 MQTT_LIB_CUSTOM_TRANSPORT。
+  SC1777Y_SECURE_CHANNEL、MQTT_LIB 和 MQTT_LIB_CUSTOM_TRANSPORT。
 
 安全协议核心不进入现有 SC1777Y 驱动。驱动继续只负责芯片命令和 SPI 传输。
 `handshake.c` 和 `record.c` 直接包含 `zephyr/drivers/misc/sc1777y.h` 并调用公共驱动
-API，不增加密码操作 vtable，也不用软件密码实现替代芯片。可替换的私有接口只限于
-底层连续字节流，以便在没有真实网络的 ztest 中精确注入拆包、粘包、超时和断开。
+API，不增加密码操作 vtable，也不用软件密码实现替代芯片。
 
 ## 5. 公共接口
 
@@ -357,16 +355,18 @@ mqtt_client_custom_transport_disconnect()
 
 ## 11. 测试设计
 
-默认测试入口每次运行驱动、协议、适配和 TAP 端到端测试。任何一层失败均返回
-非零状态。
+测试按两个交付阶段组织，每个阶段都有自己的 TAP 端到端测试。第二阶段完成后，
+统一默认测试入口每次运行两个阶段的全部测试；缺少权限或依赖时失败，不允许 skip。
 
-### 11.1 安全通道库与 SC1777Y ztest
+现有 `tests/drivers/misc/sc1777y` 已负责芯片命令、SPI 帧、LRC、重试和 emulator
+行为。新安全通信库测试只调用 `sc1777y.h` 公共驱动 API，不包含
+`sc1777y_emul.h`，不调用 `sc1777y_emul_*()`，也不重复断言 CLA、INS 或 SPI 字节。
+native_sim 中的 SPI emulator 仅作为无实物硬件时的 SC1777Y 芯片替身，由驱动通过
+Devicetree 透明访问。
 
-测试通过安全通道公共 API 驱动会话协商和记录层。芯片路径必须调用真实
-`sc1777y.h` 公共驱动 API，并通过现有 SPI emulator 观察命令和注入错误；只对
-底层字节流 I/O 使用脚本化测试后端，不用密码 mock 代替 SC1777Y 驱动。
+### 11.1 第一阶段：安全通信库测试
 
-覆盖：
+协议与边界 ztest 覆盖：
 
 - 三类协商报文和加密报文的逐字节编解码。
 - 网络序长度、SN+1、SN+2 和 16 位回绕。
@@ -377,107 +377,110 @@ mqtt_client_custom_transport_disconnect()
 - 非阻塞读取只返回完整明文。
 - 调用者缓冲区较小时的剩余明文缓存。
 - 非法类型、子类型、长度、SN、密文块和填充。
-- 任意阶段超时、断开和部分写入。
-- 平台类型设置、平台公钥导入和会话协商的芯片调用顺序。
-- 每个上行记录执行“随机数、导入 IV、会话加密”。
-- 每个下行记录执行“导入 IV、会话解密”。
-- 芯片状态错误、响应 LRC 错误和延迟。
+- 协商超时、对端断开和部分写入失败。
 
-附件日志作为黄金报文来源。
+第一阶段 TAP 端到端测试使用安全通信库公共 API：
 
-确定性模型沿用当前 emulator：会话加解密 XOR `0xA5`，摘要、签名和认证输出固定
-序列。测试不声称验证真实密码学。
+```text
+native_sim 安全通信测试应用
+  -> TAP + 完整 Zephyr TCP/IP
+  -> SecurityGatewayPeer
+  -> 本地 TCP echo 服务
+```
 
-### 11.2 socket 与 MQTT 适配测试
+`SecurityGatewayPeer` 完成确定性会话协商和安全记录终结，再把明文透明转发给本地
+echo 服务。测试应用只执行 `init/connect/send/recv/close`，不使用 MQTT。端到端
+覆盖双向数据、边界长度、多安全记录、TCP 拆包/粘包、异常断开和重新连接。
 
-在已经通过 SC1777Y 驱动路径验证的安全通道库之上覆盖：
+此测试会经过真实 SC1777Y 驱动 API；native_sim 的 SPI emulator 在设备树后方提供
+确定性芯片响应，但测试代码不读取、配置或检查 emulator。附件交互日志作为主站
+协议黄金样本。
 
-- socket 创建、接口绑定、连接、完整发送和增量接收。
-- 验证 custom transport 五个入口。
-- 验证 `write_msg()` 多 iovec 的连续字节语义。
-- 验证 MQTT CONNECT 只会出现在协商确认之后。
-- 验证 socket 或安全通道错误能够按 MQTT transport 约定返回。
+### 11.2 第二阶段：MQTT 薄包装测试
 
-### 11.3 必跑 TAP 端到端测试
+适配器测试覆盖：
 
-使用 Twister pytest harness。测试入口负责：
+- custom transport 五个入口只转发到安全通信库。
+- `write_msg()` 多 iovec 的连续字节语义。
+- MQTT CONNECT 只会出现在安全协商确认之后。
+- 安全通信库错误按 MQTT transport 约定返回。
+- 薄包装不解析安全协议、不直接调用 SC1777Y 驱动。
+
+第二阶段 TAP 端到端链路为：
+
+```text
+native_sim MQTT 测试应用
+  -> Zephyr MQTT
+  -> MQTT custom transport 薄包装
+  -> 安全通信库
+  -> TAP + 完整 Zephyr TCP/IP
+  -> SecurityGatewayPeer
+  -> 本地真实 Mosquitto Broker
+```
+
+测试入口负责：
 
 1. 检查 `CAP_NET_ADMIN` 或 root、Zephyr net-tools、`mosquitto`、
    `mosquitto_sub` 和 `mosquitto_pub`。
 2. 创建唯一 TAP 接口，并确保退出时无条件清理。
 3. 用临时配置启动隔离的本地 Mosquitto Broker；禁用持久化并使用独立端口。
-4. 启动 `SecurityGatewayPeer`，监听 TAP 主机地址上的安全接入端口。
-5. 启动 native_sim 终端。
-6. 汇总终端、网关、Mosquitto 客户端工具和 Broker 的断言与日志。
-7. 无条件停止进程并清理 TAP 和临时文件。
+4. 启动 `SecurityGatewayPeer`，监听 TAP 主机地址上的安全接入端口，并连接本地
+   Mosquitto 的明文 TCP 端口。
+5. 启动 `mosquitto_sub` 观察终端上行主题。
+6. 启动 native_sim MQTT 测试应用。
+7. 使用 `mosquitto_pub` 向终端订阅主题发布 QoS 1 下行消息。
+8. 汇总终端、网关、Mosquitto 客户端工具和 Broker 的断言与日志。
+9. 无条件停止进程并清理 TAP 和临时文件。
 
-缺少必需能力或依赖时测试失败，不允许 skip。
+`SecurityGatewayPeer` 不解析或模拟 Broker 行为，只终结安全协议并在终端安全连接与
+Mosquitto 明文连接之间双向透明转发。
 
-`SecurityGatewayPeer` 的职责严格限制为：
+第二阶段端到端测试覆盖：
 
-- 接收终端唯一 TCP 连接。
-- 使用与 SC1777Y emulator 配套的确定性模型完成三步安全协商。
-- 建立到本地 Mosquitto 的独立明文 TCP 连接。
-- 将终端安全记录解密、去填充后原样写入 Mosquitto socket。
-- 将 Mosquitto socket 返回的 MQTT 字节切分、填充、确定性加密后写回终端。
-- 记录转发字节和协议事件，供 pytest 断言。
-
-它不解析或模拟 Broker 行为。MQTT 语义验证由真实 Mosquitto 和官方客户端工具
-完成：`mosquitto_sub` 订阅终端上行主题以确认 Broker 实际收到报文，
-`mosquitto_pub` 向终端订阅主题发布 QoS 1 下行消息。
-
-每次端到端测试覆盖：
-
-1. TAP 上建立唯一 TCP 连接。
-2. 三步会话协商。
-3. MQTT CONNECT/CONNACK。
-4. SUBSCRIBE/SUBACK。
-5. 上传附件中的拓扑添加 PUBLISH。
-6. 上传附件中的设备数据 PUBLISH。
-7. 额外 QoS 1 上行及 PUBACK。
-8. `mosquitto_pub` 经真实 Broker 下发 QoS 1 PUBLISH，终端返回 PUBACK。
-9. PINGREQ/PINGRESP。
-10. 网关主动拆分和合并 TCP 写入，验证增量接收。
-11. MQTT DISCONNECT 和正常关闭。
-12. 协商失败、损坏填充、连接中断和重新连接场景。
+1. 三步安全协商。
+2. MQTT CONNECT/CONNACK。
+3. SUBSCRIBE/SUBACK。
+4. 上传附件中的拓扑添加 PUBLISH。
+5. 上传附件中的设备数据 PUBLISH。
+6. 额外 QoS 1 上行及 PUBACK。
+7. `mosquitto_pub` 经真实 Broker 下发 QoS 1 PUBLISH，终端返回 PUBACK。
+8. PINGREQ/PINGRESP。
+9. 网关主动拆分和合并 TCP 写入，验证增量接收。
+10. MQTT DISCONNECT 和正常关闭。
+11. 协商失败、损坏填充、连接中断和重新连接场景。
 
 ## 12. 实施拆分
 
-整体设计保留在本文档中，实施拆成三个依赖明确的计划，避免一个巨型计划和提交：
+整体设计保留在本文档中，实施和测试严格拆成两个功能阶段：
 
 ### 计划一：SC1777Y 安全通道库
 
 - 帧编解码。
 - 会话协商状态机。
 - 记录层、缓存、同步和错误模型。
-- 直接调用现有 `sc1777y.h` 公共驱动 API。
-- 核心 Kconfig 和 CMake 集成。
-- 通过 SPI emulator 和脚本化字节流 I/O 测试安全通道公共 API。
-
-交付标准：在不依赖 socket 和 MQTT 的情况下，安全通道公共 API 已通过真实
-SC1777Y 驱动路径和确定性字节流测试验证。
-
-### 计划二：Zephyr socket 与 MQTT 集成
-
 - Zephyr socket I/O。
-- socket 相关 Kconfig 和 CMake 集成。
+- 直接调用现有 `sc1777y.h` 公共驱动 API。
+- Kconfig 和 CMake 集成。
+- 协议与边界 ztest。
+- native_sim + TAP + SecurityGatewayPeer + TCP echo 第一阶段端到端测试。
+
+交付标准：不依赖 MQTT，安全通信库公共 API 已通过真实 socket、完整 Zephyr
+TCP/IP、SC1777Y 公共驱动路径和双向端到端测试。
+
+### 计划二：MQTT custom transport 薄包装
+
 - MQTT custom transport 薄适配。
-- socket 和 MQTT 适配测试。
-
-交付标准：native_sim 内能够通过真实 MQTT API 驱动安全通道，尚不要求外部 TAP。
-
-### 计划三：必跑端到端门禁
-
-- native_sim 终端测试应用。
-- TAP 编排。
-- SecurityGatewayPeer。
+- MQTT 适配器组件测试。
+- native_sim MQTT 测试应用。
 - 隔离 Mosquitto、`mosquitto_sub` 和 `mosquitto_pub`。
-- 双向 MQTT 正常与错误场景。
+- SecurityGatewayPeer 到真实 Mosquitto 的透明代理。
+- 第二阶段双向 MQTT 正常与错误端到端场景。
 - 默认统一测试入口和运行文档。
 
-交付标准：单条默认测试命令每次运行全部测试，端到端链路任何失败都会阻止通过。
+交付标准：MQTT 只通过薄包装使用第一阶段安全通信库；单条默认测试命令每次运行
+第一、第二阶段全部测试，任一端到端链路失败都会阻止通过。
 
-三个计划依次实施；只有计划三通过，整体功能才视为交付。
+两个计划依次实施；每个计划必须在自身端到端测试通过后才进入下一阶段或交付。
 
 ## 13. 验收标准
 
@@ -491,4 +494,6 @@ SC1777Y 驱动路径和确定性字节流测试验证。
 - native_sim 通过 TAP 使用完整 Zephyr 网络栈。
 - SecurityGatewayPeer 透明连接真实本地 Mosquitto，不使用 BrokerStub。
 - 真实 Mosquitto 完成 CONNECT、订阅、双向发布、QoS 1 和保活交互。
-- 驱动、协议、适配和 TAP 端到端测试全部属于默认必跑门禁。
+- 新测试只通过 SC1777Y 公共驱动 API 使用芯片，不直接操作 SPI emulator。
+- 安全通信库和 MQTT 薄包装两个阶段各有独立 TAP 端到端测试。
+- 两阶段单元、组件和端到端测试全部属于默认必跑门禁。
