@@ -1,4 +1,7 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * SPDX-FileCopyrightText: Copyright The Zephyr Project Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #ifndef ZEPHYR_INCLUDE_NET_SC1777Y_SECURE_CHANNEL_H_
 #define ZEPHYR_INCLUDE_NET_SC1777Y_SECURE_CHANNEL_H_

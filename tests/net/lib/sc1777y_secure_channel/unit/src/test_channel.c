@@ -1,4 +1,7 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * SPDX-FileCopyrightText: Copyright The Zephyr Project Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <zephyr/net/sc1777y_secure_channel.h>
 #include <zephyr/ztest.h>
@@ -131,6 +134,25 @@ ZTEST(sc1777y_secure_channel, test_init_copies_config_and_initializes_context)
 	zassert_ok(k_mutex_unlock(&channel.rx_lock));
 	zassert_ok(k_mutex_lock(&channel.crypto_lock, K_NO_WAIT));
 	zassert_ok(k_mutex_unlock(&channel.crypto_lock));
+}
+
+ZTEST(sc1777y_secure_channel, test_init_accepts_and_copies_ipv6_gateway)
+{
+	struct sc1777y_secure_channel channel;
+	struct sockaddr_in gateway;
+	struct sockaddr_in6 gateway6 = {
+		.sin6_family = AF_INET6,
+		.sin6_port = htons(443),
+		.sin6_addr.s6_addr = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+	};
+	struct sc1777y_secure_channel_config config = valid_config(&gateway);
+
+	config.gateway = (const struct sockaddr *)&gateway6;
+	config.gateway_len = sizeof(gateway6);
+
+	zassert_ok(sc1777y_secure_channel_init(&channel, &config));
+	zassert_equal(channel.config.gateway, (const struct sockaddr *)&channel.gateway_storage);
+	zassert_mem_equal(channel.config.gateway, &gateway6, sizeof(gateway6));
 }
 
 ZTEST_SUITE(sc1777y_secure_channel, NULL, NULL, NULL, NULL, NULL);

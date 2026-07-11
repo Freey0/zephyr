@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright The Zephyr Project Contributors
+# SPDX-License-Identifier: Apache-2.0
+
 tests:
   net.lib.sc1777y_secure_channel.unit:
     platform_allow:

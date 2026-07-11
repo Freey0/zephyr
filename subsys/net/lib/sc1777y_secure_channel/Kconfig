@@ -1,6 +1,7 @@
-# SC1777Y secure channel library configuration options
-
+# SPDX-FileCopyrightText: Copyright The Zephyr Project Contributors
 # SPDX-License-Identifier: Apache-2.0
+
+# SC1777Y secure channel library configuration options
 
 config SC1777Y_SECURE_CHANNEL
 	bool "SC1777Y secure channel"
