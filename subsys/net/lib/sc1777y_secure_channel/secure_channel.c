@@ -37,6 +37,13 @@ void sc1777y_secure_channel_clear_rx(struct sc1777y_secure_channel *channel)
 	channel->plain_len = 0U;
 }
 
+static void cleanup_channel(struct sc1777y_secure_channel *channel)
+{
+	sc1777y_secure_socket_close(channel);
+	memset(channel->tx_work, 0, sizeof(channel->tx_work));
+	sc1777y_secure_channel_clear_rx(channel);
+}
+
 int sc1777y_secure_channel_init(struct sc1777y_secure_channel *channel,
 				const struct sc1777y_secure_channel_config *config)
 {
@@ -79,6 +86,7 @@ int sc1777y_secure_channel_init(struct sc1777y_secure_channel *channel,
 	k_mutex_init(&channel->tx_lock);
 	k_mutex_init(&channel->rx_lock);
 	k_mutex_init(&channel->crypto_lock);
+	memset(channel->tx_work, 0, sizeof(channel->tx_work));
 	sc1777y_secure_channel_clear_rx(channel);
 
 	return 0;
@@ -92,8 +100,7 @@ sc1777y_secure_channel_get_state(const struct sc1777y_secure_channel *channel)
 
 int sc1777y_secure_channel_fail(struct sc1777y_secure_channel *channel, int ret)
 {
-	sc1777y_secure_socket_close(channel);
-	sc1777y_secure_channel_clear_rx(channel);
+	cleanup_channel(channel);
 	channel->state = SC1777Y_SECURE_CHANNEL_FAILED;
 	return ret;
 }
@@ -105,24 +112,19 @@ int sc1777y_secure_channel_connect(struct sc1777y_secure_channel *channel)
 	if (channel == NULL) {
 		return -EINVAL;
 	}
-	if (channel->socket_fd >= 0) {
-		return -EISCONN;
+	if (((channel->state != SC1777Y_SECURE_CHANNEL_DISCONNECTED) &&
+	     (channel->state != SC1777Y_SECURE_CHANNEL_CLOSED)) ||
+	    (channel->socket_fd >= 0)) {
+		return -EALREADY;
 	}
 
 	ret = sc1777y_secure_socket_connect(channel);
 	if (ret < 0) {
-		channel->state = SC1777Y_SECURE_CHANNEL_FAILED;
 		return ret;
 	}
 
 	channel->state = SC1777Y_SECURE_CHANNEL_TCP_CONNECTED;
-	ret = sc1777y_secure_handshake(channel);
-	if (ret < 0) {
-		sc1777y_secure_socket_close(channel);
-		channel->state = SC1777Y_SECURE_CHANNEL_FAILED;
-	}
-
-	return ret;
+	return sc1777y_secure_handshake(channel);
 }
 
 int sc1777y_secure_channel_close(struct sc1777y_secure_channel *channel)
@@ -131,8 +133,7 @@ int sc1777y_secure_channel_close(struct sc1777y_secure_channel *channel)
 		return -EINVAL;
 	}
 
-	sc1777y_secure_socket_close(channel);
-	sc1777y_secure_channel_clear_rx(channel);
+	cleanup_channel(channel);
 	channel->state = SC1777Y_SECURE_CHANNEL_CLOSED;
 	return 0;
 }

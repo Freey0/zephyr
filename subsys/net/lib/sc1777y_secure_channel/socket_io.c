@@ -23,12 +23,6 @@ void sc1777y_secure_socket_close(struct sc1777y_secure_channel *channel)
 	}
 }
 
-static int fail_and_close(struct sc1777y_secure_channel *channel, int ret)
-{
-	sc1777y_secure_socket_close(channel);
-	return ret;
-}
-
 static int set_socket_options(struct sc1777y_secure_channel *channel)
 {
 	struct zsock_timeval timeout = {
@@ -113,22 +107,22 @@ int sc1777y_secure_socket_connect(struct sc1777y_secure_channel *channel)
 	channel->socket_fd = zsock_socket(channel->config.gateway->sa_family, SOCK_STREAM,
 					  IPPROTO_TCP);
 	if (channel->socket_fd < 0) {
-		return socket_error();
+		return sc1777y_secure_channel_fail(channel, socket_error());
 	}
 
 	ret = set_socket_options(channel);
 	if (ret < 0) {
-		return fail_and_close(channel, ret);
+		return sc1777y_secure_channel_fail(channel, ret);
 	}
 
 	flags = zsock_fcntl(channel->socket_fd, ZVFS_F_GETFL, 0);
 	if (flags < 0) {
-		return fail_and_close(channel, socket_error());
+		return sc1777y_secure_channel_fail(channel, socket_error());
 	}
 
 	ret = zsock_fcntl(channel->socket_fd, ZVFS_F_SETFL, flags | ZVFS_O_NONBLOCK);
 	if (ret < 0) {
-		return fail_and_close(channel, socket_error());
+		return sc1777y_secure_channel_fail(channel, socket_error());
 	}
 
 	ret = zsock_connect(channel->socket_fd, channel->config.gateway,
@@ -147,7 +141,7 @@ out:
 		ret = socket_error();
 	}
 
-	return ret < 0 ? fail_and_close(channel, ret) : 0;
+	return ret < 0 ? sc1777y_secure_channel_fail(channel, ret) : 0;
 }
 
 int sc1777y_secure_socket_send_all(struct sc1777y_secure_channel *channel,
@@ -163,10 +157,10 @@ int sc1777y_secure_socket_send_all(struct sc1777y_secure_channel *channel,
 			continue;
 		}
 		if (ret == 0) {
-			return fail_and_close(channel, -ECONNRESET);
+			return sc1777y_secure_channel_fail(channel, -ECONNRESET);
 		}
 		if (errno != EINTR) {
-			return fail_and_close(channel, socket_error());
+			return sc1777y_secure_channel_fail(channel, socket_error());
 		}
 	}
 
@@ -186,10 +180,10 @@ int sc1777y_secure_socket_recv_exact(struct sc1777y_secure_channel *channel,
 			continue;
 		}
 		if (ret == 0) {
-			return fail_and_close(channel, -ECONNRESET);
+			return sc1777y_secure_channel_fail(channel, -ECONNRESET);
 		}
 		if (errno != EINTR) {
-			return fail_and_close(channel, socket_error());
+			return sc1777y_secure_channel_fail(channel, socket_error());
 		}
 	}
 

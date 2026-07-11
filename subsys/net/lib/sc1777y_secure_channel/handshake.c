@@ -31,7 +31,7 @@ int sc1777y_secure_handshake(struct sc1777y_secure_channel *channel)
 	channel->state = SC1777Y_SECURE_CHANNEL_NEGOTIATING;
 	ret = k_mutex_lock(&channel->crypto_lock, K_FOREVER);
 	if (ret < 0) {
-		return ret;
+		return sc1777y_secure_channel_fail(channel, ret);
 	}
 
 	ret = sc1777y_set_platform_type(dev, channel->config.platform_type);
@@ -117,5 +117,5 @@ int sc1777y_secure_handshake(struct sc1777y_secure_channel *channel)
 
 out:
 	(void)k_mutex_unlock(&channel->crypto_lock);
-	return ret;
+	return ret < 0 ? sc1777y_secure_channel_fail(channel, ret) : 0;
 }

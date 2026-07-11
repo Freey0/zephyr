@@ -113,9 +113,7 @@ static int socket_recv(struct sc1777y_secure_channel *channel, uint8_t *data, si
 			return (int)ret;
 		}
 		if (ret == 0) {
-			sc1777y_secure_socket_close(channel);
-			sc1777y_secure_channel_clear_rx(channel);
-			channel->state = SC1777Y_SECURE_CHANNEL_CLOSED;
+			(void)sc1777y_secure_channel_close(channel);
 			return 0;
 		}
 		if (errno == EINTR) {
@@ -243,7 +241,7 @@ int sc1777y_secure_channel_recv(struct sc1777y_secure_channel *channel, uint8_t 
 
 	ret = k_mutex_lock(&channel->rx_lock, K_FOREVER);
 	if (ret < 0) {
-		return ret;
+		return sc1777y_secure_channel_fail(channel, ret);
 	}
 
 	if (channel->plain_len > channel->plain_offset) {

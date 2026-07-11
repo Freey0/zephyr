@@ -19,6 +19,9 @@ static struct sc1777y_secure_channel channel;
 static struct test_gateway gateway;
 static uint8_t input[3000];
 static uint8_t output[3000];
+static const uint8_t zero_tx_work[SC1777Y_SECURE_MAX_HANDSHAKE_LEN];
+static const uint8_t zero_rx_record[SC1777Y_SECURE_MAX_RECORD_LEN];
+static const uint8_t zero_plain_cache[SC1777Y_SECURE_MAX_PLAINTEXT_CHUNK];
 
 static void connect_channel(void)
 {
@@ -156,11 +159,22 @@ static void expect_record_failure(enum test_gateway_mode mode, int expected_erro
 {
 	test_gateway_start(&gateway, mode);
 	connect_channel();
+	memset(channel.tx_work, 0x5a, sizeof(channel.tx_work));
+	memset(channel.rx_record, 0x5a, sizeof(channel.rx_record));
+	memset(channel.plain_cache, 0x5a, sizeof(channel.plain_cache));
 	zassert_equal(expected_error,
 		      sc1777y_secure_channel_recv(&channel, output, sizeof(output), true));
 	zassert_equal(SC1777Y_SECURE_CHANNEL_FAILED,
 		      sc1777y_secure_channel_get_state(&channel));
 	zassert_equal(-1, channel.socket_fd);
+	zassert_mem_equal(channel.tx_work, zero_tx_work, sizeof(channel.tx_work));
+	zassert_mem_equal(channel.rx_record, zero_rx_record, sizeof(channel.rx_record));
+	zassert_mem_equal(channel.plain_cache, zero_plain_cache, sizeof(channel.plain_cache));
+	zassert_equal(0, channel.header_used);
+	zassert_equal(0, channel.record_expected);
+	zassert_equal(0, channel.record_used);
+	zassert_equal(0, channel.plain_offset);
+	zassert_equal(0, channel.plain_len);
 	test_gateway_wait(&gateway);
 }
 
@@ -174,6 +188,9 @@ ZTEST(sc1777y_secure_record, test_recv_returns_zero_when_peer_closes_mid_record)
 {
 	test_gateway_start(&gateway, TEST_GATEWAY_RECORD_HALF_CLOSE);
 	connect_channel();
+	memset(channel.tx_work, 0x5a, sizeof(channel.tx_work));
+	memset(channel.rx_record, 0x5a, sizeof(channel.rx_record));
+	memset(channel.plain_cache, 0x5a, sizeof(channel.plain_cache));
 	zassert_equal(0, sc1777y_secure_channel_recv(&channel, output, sizeof(output), true));
 	zassert_equal(SC1777Y_SECURE_CHANNEL_CLOSED,
 		      sc1777y_secure_channel_get_state(&channel));
@@ -182,6 +199,9 @@ ZTEST(sc1777y_secure_record, test_recv_returns_zero_when_peer_closes_mid_record)
 	zassert_equal(0, channel.record_used);
 	zassert_equal(0, channel.rx_record[0]);
 	zassert_equal(0, channel.rx_record[4]);
+	zassert_mem_equal(channel.tx_work, zero_tx_work, sizeof(channel.tx_work));
+	zassert_mem_equal(channel.rx_record, zero_rx_record, sizeof(channel.rx_record));
+	zassert_mem_equal(channel.plain_cache, zero_plain_cache, sizeof(channel.plain_cache));
 	test_gateway_wait(&gateway);
 }
 
