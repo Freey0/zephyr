@@ -18,6 +18,14 @@ struct sc1777y_secure_handshake_response {
 	uint8_t signature[SC1777Y_SIGNATURE_LEN];
 };
 
+int sc1777y_secure_socket_connect(struct sc1777y_secure_channel *channel);
+int sc1777y_secure_socket_send_all(struct sc1777y_secure_channel *channel,
+				   const uint8_t *data, size_t len);
+int sc1777y_secure_socket_recv_exact(struct sc1777y_secure_channel *channel,
+				     uint8_t *data, size_t len);
+void sc1777y_secure_socket_close(struct sc1777y_secure_channel *channel);
+int sc1777y_secure_handshake(struct sc1777y_secure_channel *channel);
+
 int sc1777y_secure_pad(uint8_t *buf, size_t plain_len, size_t capacity,
 		       size_t *padded_len);
 int sc1777y_secure_unpad(uint8_t *buf, size_t padded_len, size_t *plain_len);

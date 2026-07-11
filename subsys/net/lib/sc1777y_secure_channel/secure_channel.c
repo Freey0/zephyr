@@ -8,6 +8,8 @@
 
 #include <zephyr/net/sc1777y_secure_channel.h>
 
+#include "secure_channel_internal.h"
+
 static int validate_gateway(const struct sockaddr *gateway, socklen_t gateway_len)
 {
 	if ((gateway == NULL) || (gateway_len < sizeof(gateway->sa_family))) {
@@ -79,4 +81,42 @@ enum sc1777y_secure_channel_state
 sc1777y_secure_channel_get_state(const struct sc1777y_secure_channel *channel)
 {
 	return channel->state;
+}
+
+int sc1777y_secure_channel_connect(struct sc1777y_secure_channel *channel)
+{
+	int ret;
+
+	if (channel == NULL) {
+		return -EINVAL;
+	}
+	if (channel->socket_fd >= 0) {
+		return -EISCONN;
+	}
+
+	ret = sc1777y_secure_socket_connect(channel);
+	if (ret < 0) {
+		channel->state = SC1777Y_SECURE_CHANNEL_FAILED;
+		return ret;
+	}
+
+	channel->state = SC1777Y_SECURE_CHANNEL_TCP_CONNECTED;
+	ret = sc1777y_secure_handshake(channel);
+	if (ret < 0) {
+		sc1777y_secure_socket_close(channel);
+		channel->state = SC1777Y_SECURE_CHANNEL_FAILED;
+	}
+
+	return ret;
+}
+
+int sc1777y_secure_channel_close(struct sc1777y_secure_channel *channel)
+{
+	if (channel == NULL) {
+		return -EINVAL;
+	}
+
+	sc1777y_secure_socket_close(channel);
+	channel->state = SC1777Y_SECURE_CHANNEL_CLOSED;
+	return 0;
 }

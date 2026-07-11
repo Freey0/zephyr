@@ -6,6 +6,8 @@
 #include <zephyr/net/sc1777y_secure_channel.h>
 #include <zephyr/ztest.h>
 
+#include "test_gateway.h"
+
 #define SC1777Y_NODE DT_ALIAS(sc1777y_0)
 
 static const uint8_t certificate[] = {0x01};
@@ -30,6 +32,16 @@ static struct sc1777y_secure_channel_config valid_config(struct sockaddr_in *gat
 		.platform_public_key = platform_public_key,
 		.platform_type = SC1777Y_PLATFORM_NANRUI,
 	};
+}
+
+static void test_channel_config(struct sc1777y_secure_channel_config *config,
+				const struct sockaddr *gateway)
+{
+	struct sockaddr_in unused;
+
+	*config = valid_config(&unused);
+	config->gateway = gateway;
+	config->gateway_len = sizeof(struct sockaddr_in);
 }
 
 ZTEST(sc1777y_secure_channel, test_init_rejects_null_arguments)
@@ -153,6 +165,56 @@ ZTEST(sc1777y_secure_channel, test_init_accepts_and_copies_ipv6_gateway)
 	zassert_ok(sc1777y_secure_channel_init(&channel, &config));
 	zassert_equal(channel.config.gateway, (const struct sockaddr *)&channel.gateway_storage);
 	zassert_mem_equal(channel.config.gateway, &gateway6, sizeof(gateway6));
+}
+
+ZTEST(sc1777y_secure_channel, test_connect_completes_handshake_before_return)
+{
+	struct test_gateway gateway;
+	struct sc1777y_secure_channel channel;
+	struct sc1777y_secure_channel_config config;
+	int ret;
+
+	test_gateway_start(&gateway, TEST_GATEWAY_SUCCESS);
+	test_channel_config(&config, test_gateway_address(&gateway));
+	zassert_ok(sc1777y_secure_channel_init(&channel, &config));
+	ret = sc1777y_secure_channel_connect(&channel);
+	zassert_ok(ret, "connect failed: %d", ret);
+	zassert_equal(SC1777Y_SECURE_CHANNEL_ESTABLISHED,
+		      sc1777y_secure_channel_get_state(&channel));
+	zassert_true(test_gateway_saw_confirm(&gateway));
+	zassert_ok(sc1777y_secure_channel_close(&channel));
+}
+
+static void expect_gateway_failure(enum test_gateway_mode mode, int expected_error)
+{
+	struct test_gateway gateway;
+	struct sc1777y_secure_channel channel;
+	struct sc1777y_secure_channel_config config;
+	int ret;
+
+	test_gateway_start(&gateway, mode);
+	test_channel_config(&config, test_gateway_address(&gateway));
+	zassert_ok(sc1777y_secure_channel_init(&channel, &config));
+	ret = sc1777y_secure_channel_connect(&channel);
+	zassert_equal(expected_error, ret, "mode %d: expected %d, got %d", mode,
+		      expected_error, ret);
+	zassert_equal(SC1777Y_SECURE_CHANNEL_FAILED,
+		      sc1777y_secure_channel_get_state(&channel));
+	zassert_equal(-1, channel.socket_fd);
+	test_gateway_wait(&gateway);
+}
+
+ZTEST(sc1777y_secure_channel, test_connect_rejects_malformed_responses)
+{
+	expect_gateway_failure(TEST_GATEWAY_WRONG_SUBTYPE, -EPROTO);
+	expect_gateway_failure(TEST_GATEWAY_WRONG_LENGTH, -EPROTO);
+	expect_gateway_failure(TEST_GATEWAY_WRONG_SN, -EPROTO);
+}
+
+ZTEST(sc1777y_secure_channel, test_connect_fails_when_response_is_short_or_peer_closes)
+{
+	expect_gateway_failure(TEST_GATEWAY_SHORT_RESPONSE, -ECONNRESET);
+	expect_gateway_failure(TEST_GATEWAY_PEER_CLOSE, -ECONNRESET);
 }
 
 ZTEST_SUITE(sc1777y_secure_channel, NULL, NULL, NULL, NULL, NULL);

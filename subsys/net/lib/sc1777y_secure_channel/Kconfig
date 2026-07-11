@@ -8,5 +8,7 @@ config SC1777Y_SECURE_CHANNEL
 	depends on SC1777Y
 	depends on NETWORKING
 	depends on NET_SOCKETS
+	select NET_CONTEXT_RCVTIMEO
+	select NET_CONTEXT_SNDTIMEO
 	help
 	  Enable the SC1777Y-backed secure channel library.
