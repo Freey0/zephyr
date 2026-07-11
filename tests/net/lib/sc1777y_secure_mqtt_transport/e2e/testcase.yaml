@@ -3,11 +3,11 @@
 
 tests:
   net.lib.sc1777y_secure_mqtt_transport.e2e:
-    harness: console
+    harness: pytest
     harness_config:
-      type: one_line
-      regex:
-        - "MQTT_SECURE_E2E_PASS"
+      pytest_root:
+        - pytest
+      pytest_dut_scope: function
     integration_platforms:
       - native_sim
     platform_allow:
