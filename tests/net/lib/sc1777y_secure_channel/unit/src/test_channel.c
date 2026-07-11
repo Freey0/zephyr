@@ -227,6 +227,7 @@ ZTEST(sc1777y_secure_channel, test_connect_rejects_an_established_channel)
 	zassert_equal(SC1777Y_SECURE_CHANNEL_ESTABLISHED,
 		      sc1777y_secure_channel_get_state(&channel));
 	zassert_ok(sc1777y_secure_channel_close(&channel));
+	test_gateway_wait(&gateway);
 }
 
 ZTEST(sc1777y_secure_channel, test_close_is_idempotent_before_connect)
