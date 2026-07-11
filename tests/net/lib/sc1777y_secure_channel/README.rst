@@ -17,10 +17,13 @@ test run.
 Host prerequisites
 ------------------
 
-* Run with root privileges or ``CAP_NET_ADMIN`` sufficient to create,
-  configure, and remove a TAP interface.  The Zephyr ``net-setup.sh`` helper
-  invokes ``sudo`` when it is not already running as root, so any required
-  authorization must work non-interactively during the test.
+* Run as root, or configure ``sudo`` so that the stock Zephyr
+  ``net-setup.sh`` can elevate non-interactively.  That helper unconditionally
+  re-executes itself through ``sudo`` whenever its UID is not zero, so granting
+  ``CAP_NET_ADMIN`` only to the Twister process is not sufficient with the
+  stock helper.  ``CAP_NET_ADMIN`` can replace root only when using a modified
+  helper which does not impose that UID check and which retains the capability
+  while creating, configuring, and removing the TAP interface.
 * Set ``NET_TOOLS_BASE`` to the Zephyr net-tools directory containing an
   executable ``net-setup.sh``.  For example:
 
