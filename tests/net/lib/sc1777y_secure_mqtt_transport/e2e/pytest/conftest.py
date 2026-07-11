@@ -39,6 +39,22 @@ UPSTREAM_TOPICS = (
     f"{DEVICE_TOPIC_PREFIX}/test-up",
 )
 DOWNLINK_TOPIC = f"{DEVICE_TOPIC_PREFIX}/commands"
+EXPECTED_TOPO_PAYLOAD = (
+    '{"mid":869010075627892,"deviceInfos":{"nodeId":"869010075627892",'
+    '"name":"XJ_ZNJDX","description":"XJ_ZNJDX",'
+    '"manufacturerId":"869010075627892","model":"XJ_ZNJDX"}}'
+)
+EXPECTED_DATA_PAYLOAD = (
+    '{"devices": [{"deviceId": "869010075627892","services": [{"data": {'
+    '"type": "400","id": "869010075627892","date": "260512",'
+    '"time": "154112","height": "0.00000000","geo_sep": "0.00000000",'
+    '"longitude": "0.00000000","latitude": "0.00000000",'
+    '"speed": "0.00000000","direction": "0.00000000","voltage": "380",'
+    '"temperature": "2530","state_a": "0","state_b": "0",'
+    '"state_c": "0","date1": "0","date2": "0","date3": "0",'
+    '"precision": "0","satellite": "0","count": "0","alarm": "0"},'
+    '"eventTime": "20260512T154112Z","serviceId": "analog"}]}]}'
+)
 MOSQUITTO_CONFIG = (
     "listener 18884 127.0.0.1\n"
     "allow_anonymous true\n"
@@ -55,9 +71,16 @@ class ReconnectableSecurityGatewayPeer(SecurityGatewayPeer):
     """Security gateway with a test-controlled terminal-side disconnect."""
 
     def __init__(
-        self, listen_addr: tuple[str, int], upstream_addr: tuple[str, int]
+        self,
+        listen_addr: tuple[str, int],
+        upstream_addr: tuple[str, int],
+        fault_mode: str | None = None,
     ) -> None:
-        super().__init__(listen_addr=listen_addr, upstream_addr=upstream_addr)
+        super().__init__(
+            listen_addr=listen_addr,
+            upstream_addr=upstream_addr,
+            fault_mode=fault_mode,
+        )
         self._terminal_condition = threading.Condition()
         self._controlled_terminal: socket.socket | None = None
 
@@ -395,8 +418,9 @@ def _verify_tap() -> None:
 
 
 class _SecureGatewayEnvironment:
-    def __init__(self, setup_script: Path) -> None:
+    def __init__(self, setup_script: Path, fault_mode: str | None = None) -> None:
         self.setup_script = setup_script
+        self.fault_mode = fault_mode
         self.tap_start_attempted = False
         self.gateway: ReconnectableSecurityGatewayPeer | None = None
 
@@ -407,6 +431,7 @@ class _SecureGatewayEnvironment:
         self.gateway = ReconnectableSecurityGatewayPeer(
             listen_addr=(GATEWAY_HOST, GATEWAY_PORT),
             upstream_addr=(BROKER_HOST, BROKER_PORT),
+            fault_mode=self.fault_mode,
         )
         self.gateway.start()
         return self.gateway
@@ -553,3 +578,41 @@ def secure_gateway(
                         f"secure gateway cleanup failed: {details}", pytrace=False
                     )
                 LOGGER.error("secure gateway cleanup also failed: %s", details)
+
+
+@pytest.fixture()
+def faulty_secure_gateway(
+    request: pytest.FixtureRequest,
+    mosquitto_broker: MosquittoBroker,
+) -> Generator[ReconnectableSecurityGatewayPeer, None, None]:
+    del mosquitto_broker
+    net_tools = os.environ.get("NET_TOOLS_BASE")
+    if not net_tools:
+        pytest.fail("NET_TOOLS_BASE is required for mandatory TAP testing")
+    setup_script = Path(net_tools) / "net-setup.sh"
+    if not setup_script.is_file() or not os.access(setup_script, os.X_OK):
+        pytest.fail(f"required executable does not exist: {setup_script}")
+
+    with tap_gate_lock():
+        environment = _SecureGatewayEnvironment(
+            setup_script, fault_mode=str(request.param)
+        )
+        primary_error: BaseException | None = None
+        try:
+            try:
+                gateway = environment.start()
+            except BaseException as error:
+                pytest.fail(f"faulty secure gateway setup failed: {error!r}", pytrace=False)
+            yield gateway
+        except BaseException as error:
+            primary_error = error
+            raise
+        finally:
+            cleanup_errors = environment.stop()
+            if cleanup_errors:
+                details = "; ".join(cleanup_errors)
+                if primary_error is None:
+                    pytest.fail(
+                        f"faulty secure gateway cleanup failed: {details}", pytrace=False
+                    )
+                LOGGER.error("faulty secure gateway cleanup also failed: %s", details)

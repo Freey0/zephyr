@@ -10,6 +10,7 @@ import socket
 import struct
 import threading
 from collections.abc import Iterable
+from contextlib import suppress
 
 HANDSHAKE_RESPONSE_LEN = 230
 HANDSHAKE_CONFIRM_LEN = 184
@@ -18,6 +19,9 @@ MAX_CIPHERTEXT_LEN = 2048
 MAX_PLAINTEXT_CHUNK = 2047
 CRYPTO_MASK = 0xA5
 WRITE_FRAGMENTS = (1, 3, 17, 64)
+FAULT_BAD_HANDSHAKE_RESPONSE = "bad_handshake_response"
+FAULT_BAD_RECORD_PADDING = "bad_record_padding"
+FAULT_MODES = {FAULT_BAD_HANDSHAKE_RESPONSE, FAULT_BAD_RECORD_PADDING}
 
 
 def _incrementing(base: int, length: int) -> bytes:
@@ -82,12 +86,23 @@ def _encode_records(plaintext: bytes) -> Iterable[bytes]:
 
 class SecurityGatewayPeer:
     def __init__(
-        self, listen_addr: tuple[str, int], upstream_addr: tuple[str, int]
+        self,
+        listen_addr: tuple[str, int],
+        upstream_addr: tuple[str, int],
+        fault_mode: str | None = None,
     ) -> None:
+        if fault_mode is not None and fault_mode not in FAULT_MODES:
+            raise ValueError(f"unsupported security fault mode: {fault_mode}")
         self.listen_addr = listen_addr
         self.upstream_addr = upstream_addr
+        self.fault_mode = fault_mode
+        self.handshake_request_count = 0
         self.handshake_count = 0
         self.forwarded_plaintext_bytes = 0
+        self.coalesced_write_count = 0
+        self.fault_injected = False
+        self.terminal_close_observed = False
+        self._terminal_closed = threading.Event()
         self.errors: list[BaseException] = []
         self._listener: socket.socket | None = None
         self._terminal: socket.socket | None = None
@@ -115,14 +130,10 @@ class SecurityGatewayPeer:
         self._stop.set()
         for sock in (self._terminal, self._upstream, self._listener):
             if sock is not None:
-                try:
+                with suppress(OSError):
                     sock.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
-                try:
+                with suppress(OSError):
                     sock.close()
-                except OSError:
-                    pass
         if self._worker is not None:
             self._worker.join(timeout=3.0)
             if self._worker.is_alive():
@@ -143,7 +154,7 @@ class SecurityGatewayPeer:
             while not self._stop.is_set():
                 try:
                     terminal, _ = self._listener.accept()
-                except socket.timeout:
+                except TimeoutError:
                     continue
                 except OSError:
                     if self._stop.is_set():
@@ -165,7 +176,17 @@ class SecurityGatewayPeer:
             if not self._stop.is_set():
                 self.errors.append(error)
 
-    def _negotiate(self, terminal: socket.socket) -> None:
+    def _wait_for_terminal_close(self, terminal: socket.socket) -> None:
+        while terminal.recv(4096):
+            pass
+        self.terminal_close_observed = True
+        self._terminal_closed.set()
+
+    def wait_for_terminal_close(self, timeout: float) -> bool:
+        """Wait until the terminal closes after an injected security fault."""
+        return self._terminal_closed.wait(timeout)
+
+    def _negotiate(self, terminal: socket.socket) -> bool:
         header = _recv_exact(terminal, 4)
         if header[:2] != b"\x01\x01":
             raise ValueError("invalid handshake request type")
@@ -184,12 +205,17 @@ class SecurityGatewayPeer:
             raise ValueError("request EnR1 does not match SC1777Y emulator")
         if request[-64:] != _incrementing(0xE0, 64):
             raise ValueError("request signature does not match SC1777Y emulator")
+        self.handshake_request_count += 1
 
         auth_factor = _incrementing(0x40, 32)
         en_r2 = _incrementing(0x20, 128)
         signature = _incrementing(0xE0, 64)
+        response_subtype = (
+            b"\x03" if self.fault_mode == FAULT_BAD_HANDSHAKE_RESPONSE else b"\x02"
+        )
         response = (
-            b"\x01\x02"
+            b"\x01"
+            + response_subtype
             + struct.pack("!H", HANDSHAKE_RESPONSE_LEN)
             + struct.pack("!H", (request_sn + 1) & 0xFFFF)
             + auth_factor
@@ -197,6 +223,11 @@ class SecurityGatewayPeer:
             + signature
         )
         _send_fragmented(terminal, response)
+
+        if self.fault_mode == FAULT_BAD_HANDSHAKE_RESPONSE:
+            self.fault_injected = True
+            self._wait_for_terminal_close(terminal)
+            return False
 
         confirm = _recv_exact(terminal, HANDSHAKE_CONFIRM_LEN)
         if confirm[:2] != b"\x01\x03":
@@ -210,10 +241,43 @@ class SecurityGatewayPeer:
         if confirm[152:] != _incrementing(0x90, 32):
             raise ValueError("confirm DKHash does not match emulator")
         self.handshake_count += 1
+        return True
+
+    def _forward_upstream_plaintext(
+        self, terminal: socket.socket, plaintext: bytes
+    ) -> None:
+        if len(plaintext) >= 2:
+            split = len(plaintext) // 2
+            records = [
+                *_encode_records(plaintext[:split]),
+                *_encode_records(plaintext[split:]),
+            ]
+            terminal.sendall(b"".join(records))
+            self.coalesced_write_count += 1
+            return
+
+        for record in _encode_records(plaintext):
+            _send_fragmented(terminal, record)
+
+    def _inject_bad_padding(self, terminal: socket.socket) -> None:
+        record_length = RECORD_FIXED_LEN + 16
+        record = (
+            b"\x02\x00"
+            + struct.pack("!H", record_length)
+            + _incrementing(0xA0, 16)
+            + bytes([CRYPTO_MASK]) * 16
+        )
+        terminal.sendall(record)
+        self.fault_injected = True
+        self._wait_for_terminal_close(terminal)
 
     def _serve_connection(self, terminal: socket.socket) -> None:
         terminal.settimeout(5.0)
-        self._negotiate(terminal)
+        if not self._negotiate(terminal):
+            return
+        if self.fault_mode == FAULT_BAD_RECORD_PADDING:
+            self._inject_bad_padding(terminal)
+            return
         terminal.settimeout(None)
         upstream = socket.create_connection(self.upstream_addr, timeout=5.0)
         upstream.settimeout(None)
@@ -225,15 +289,14 @@ class SecurityGatewayPeer:
         try:
             while not self._stop.is_set():
                 for key, _ in selector.select(timeout=0.2):
-                    data = key.fileobj.recv(8192)
+                    data = key.fileobj.recv(4094)
                     if not data:
                         return
                     if key.data == "terminal":
                         terminal_buffer.extend(data)
                         self._forward_terminal_records(terminal_buffer, upstream)
                     else:
-                        for record in _encode_records(data):
-                            _send_fragmented(terminal, record)
+                        self._forward_upstream_plaintext(terminal, data)
         finally:
             selector.close()
 

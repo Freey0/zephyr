@@ -22,11 +22,42 @@ def test_secure_mqtt_against_real_broker(
     unlaunched_dut.readlines_until("MQTT_SECURE_E2E_PASS", timeout=30.0)
 
     messages = upstream_subscriber.wait_for_messages(3, timeout=10.0)
-    assert messages[0].topic.endswith("/topo/add")
-    assert messages[1].topic.endswith("/datas")
+    assert messages[0].topic == conftest.UPSTREAM_TOPICS[0]
+    assert messages[0].payload == conftest.EXPECTED_TOPO_PAYLOAD
+    assert messages[1].topic == conftest.UPSTREAM_TOPICS[1]
+    assert messages[1].payload == conftest.EXPECTED_DATA_PAYLOAD
     assert messages[2].payload == "phase2-qos1-upstream"
     secure_gateway.raise_if_failed()
     assert secure_gateway.handshake_count == 1
+    assert secure_gateway.coalesced_write_count >= 1
+
+
+@pytest.mark.parametrize(
+    ("faulty_secure_gateway", "failure_marker", "expected_handshakes"),
+    [
+        ("bad_handshake_response", "MQTT_SECURE_CONNECT_FAILURE", 0),
+        ("bad_record_padding", "MQTT_SECURE_TRANSPORT_FAILURE", 1),
+    ],
+    indirect=["faulty_secure_gateway"],
+)
+def test_secure_mqtt_rejects_security_layer_faults(
+    mosquitto_broker,
+    faulty_secure_gateway,
+    failure_marker: str,
+    expected_handshakes: int,
+    unlaunched_dut: DeviceAdapter,
+) -> None:
+    assert mosquitto_broker.is_running
+    unlaunched_dut.launch()
+    lines = unlaunched_dut.readlines_until(failure_marker, timeout=30.0)
+
+    assert not any("MQTT_SECURE_E2E_PASS" in line for line in lines)
+    assert faulty_secure_gateway.fault_injected
+    assert faulty_secure_gateway.wait_for_terminal_close(timeout=5.0)
+    assert faulty_secure_gateway.terminal_close_observed
+    assert faulty_secure_gateway.handshake_request_count == 1
+    assert faulty_secure_gateway.handshake_count == expected_handshakes
+    faulty_secure_gateway.raise_if_failed()
 
 
 def test_controlled_disconnect_shuts_down_terminal_only(monkeypatch) -> None:
@@ -181,3 +212,4 @@ def test_secure_mqtt_reconnects_with_fresh_security_handshake(
     assert messages[-1].payload == "phase2-after-reconnect"
     secure_gateway.raise_if_failed()
     assert secure_gateway.handshake_count == 2
+    assert secure_gateway.coalesced_write_count >= 1

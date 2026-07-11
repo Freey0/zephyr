@@ -12,3 +12,4 @@ def test_secure_channel_echo(
     secure_gateway.raise_if_failed()
     assert secure_gateway.handshake_count == 2
     assert secure_gateway.forwarded_plaintext_bytes >= 6000
+    assert secure_gateway.coalesced_write_count >= 1

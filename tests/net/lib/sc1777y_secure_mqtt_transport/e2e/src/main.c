@@ -384,7 +384,7 @@ int main(void)
 	}
 	ret = initialize_mqtt_client();
 	if (ret < 0) {
-		printk("MQTT connect failed: %d\n", ret);
+		printk("MQTT_SECURE_CONNECT_FAILURE: %d\n", ret);
 		(void)sc1777y_secure_channel_close(&secure_channel);
 		return 1;
 	}
@@ -426,6 +426,9 @@ int main(void)
 	}
 
 	if (state.error != 0 || !acceptance_flow_complete()) {
+		if (state.error != 0) {
+			printk("MQTT_SECURE_TRANSPORT_FAILURE: %d\n", state.error);
+		}
 		printk("MQTT acceptance flow failed: %d\n",
 		       state.error != 0 ? state.error : -ETIMEDOUT);
 		(void)mqtt_abort(&mqtt_client);

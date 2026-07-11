@@ -4,9 +4,47 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 import conftest
+import pytest
+import security_gateway_peer as peer
+
+
+class _SendSpy:
+    def __init__(self) -> None:
+        self.calls: list[bytes] = []
+
+    def sendall(self, data: bytes) -> None:
+        self.calls.append(bytes(data))
+
+
+def _split_records(wire: bytes) -> list[bytes]:
+    records = []
+    while wire:
+        record_length = int.from_bytes(wire[2:4], "big")
+        records.append(wire[:record_length])
+        wire = wire[record_length:]
+    return records
+
+
+def test_gateway_coalesces_two_records_without_parsing_plaintext():
+    gateway = conftest.SecurityGatewayPeer(
+        listen_addr=("127.0.0.1", 0), upstream_addr=("127.0.0.1", 1)
+    )
+    terminal = _SendSpy()
+    plaintext = b"opaque-mqtt-byte-stream"
+
+    gateway._forward_upstream_plaintext(terminal, plaintext)
+
+    assert len(terminal.calls) == 1
+    records = _split_records(terminal.calls[0])
+    assert len(records) == 2
+    assert b"".join(peer._decode_record(record) for record in records) == plaintext
+    assert gateway.coalesced_write_count == 1
+
+    fragmented = _SendSpy()
+    gateway._forward_upstream_plaintext(fragmented, b"x")
+    assert len(fragmented.calls) > 1
+    assert gateway.coalesced_write_count == 1
 
 
 def _result(returncode: int = 0, stdout: str = "", stderr: str = ""):
