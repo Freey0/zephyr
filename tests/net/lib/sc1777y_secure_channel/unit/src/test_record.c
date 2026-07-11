@@ -41,6 +41,24 @@ static void connect_channel(void)
 	zassert_ok(sc1777y_secure_channel_connect(&channel));
 }
 
+static void connect_channel_with_timeout(int32_t io_timeout_ms)
+{
+	struct sc1777y_secure_channel_config config = {
+		.sc1777y = DEVICE_DT_GET(SC1777Y_NODE),
+		.gateway = test_gateway_address(&gateway),
+		.gateway_len = sizeof(struct sockaddr_in),
+		.connect_timeout_ms = 1000,
+		.io_timeout_ms = io_timeout_ms,
+		.certificate = certificate,
+		.certificate_len = sizeof(certificate),
+		.platform_public_key = platform_public_key,
+		.platform_type = SC1777Y_PLATFORM_NANRUI,
+	};
+
+	zassert_ok(sc1777y_secure_channel_init(&channel, &config));
+	zassert_ok(sc1777y_secure_channel_connect(&channel));
+}
+
 static void fill_input(size_t len)
 {
 	for (size_t i = 0U; i < len; ++i) {
@@ -135,6 +153,31 @@ ZTEST(sc1777y_secure_record, test_nonblocking_recv_retains_fragmented_record)
 	zassert_equal(0, partial_plain_len);
 	zassert_equal(sizeof(plaintext) - 1U, complete_ret);
 	zassert_mem_equal(plaintext, output, sizeof(plaintext) - 1U);
+}
+
+static void expect_blocking_record_timeout(enum test_gateway_mode mode,
+					   size_t expected_record_used)
+{
+	test_gateway_start(&gateway, mode);
+	connect_channel_with_timeout(50);
+	memset(channel.tx_work, 0x5a, sizeof(channel.tx_work));
+	zassert_equal(-ETIMEDOUT,
+		      sc1777y_secure_channel_recv(&channel, output, sizeof(output), true));
+	zassert_equal(SC1777Y_SECURE_CHANNEL_FAILED,
+		      sc1777y_secure_channel_get_state(&channel));
+	zassert_equal(-1, channel.socket_fd);
+	zassert_mem_equal(channel.tx_work, zero_tx_work, sizeof(channel.tx_work));
+	zassert_mem_equal(channel.rx_record, zero_rx_record, sizeof(channel.rx_record));
+	zassert_mem_equal(channel.plain_cache, zero_plain_cache, sizeof(channel.plain_cache));
+	zassert_equal(0, channel.record_used,
+		      "partial record progress %zu was not cleared", expected_record_used);
+	test_gateway_wait(&gateway);
+}
+
+ZTEST(sc1777y_secure_record, test_blocking_recv_timeout_fails_channel)
+{
+	expect_blocking_record_timeout(TEST_GATEWAY_RECORD_HEADER_STALL, 0U);
+	expect_blocking_record_timeout(TEST_GATEWAY_RECORD_PARTIAL_STALL, 7U);
 }
 
 ZTEST(sc1777y_secure_record, test_recv_separates_coalesced_records)

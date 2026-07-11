@@ -70,8 +70,8 @@ static int send_chunk(struct sc1777y_secure_channel *channel, const uint8_t *dat
 	}
 
 out:
-	memset(iv, 0, sizeof(iv));
-	memset(channel->tx_work, 0, sizeof(channel->tx_work));
+	sc1777y_secure_zero(iv, sizeof(iv));
+	sc1777y_secure_zero(channel->tx_work, sizeof(channel->tx_work));
 	(void)k_mutex_unlock(&channel->tx_lock);
 	return ret;
 }
@@ -120,7 +120,7 @@ static int socket_recv(struct sc1777y_secure_channel *channel, uint8_t *data, si
 			continue;
 		}
 		if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
-			return -EAGAIN;
+			return shall_block ? -ETIMEDOUT : -EAGAIN;
 		}
 		return -errno;
 	}
@@ -192,18 +192,18 @@ static int decrypt_record(struct sc1777y_secure_channel *channel)
 
 	ret = sc1777y_secure_unpad(record_body, decrypted_len, &plain_len);
 	if (ret < 0) {
-		memset(record_body, 0, decrypted_len);
+		sc1777y_secure_zero(record_body, decrypted_len);
 		return ret;
 	}
 	if (plain_len == 0U) {
-		memset(record_body, 0, decrypted_len);
+		sc1777y_secure_zero(record_body, decrypted_len);
 		return -EBADMSG;
 	}
 
 	memcpy(channel->plain_cache, record_body, plain_len);
 	channel->plain_offset = 0U;
 	channel->plain_len = plain_len;
-	memset(channel->rx_record, 0, channel->record_expected);
+	sc1777y_secure_zero(channel->rx_record, channel->record_expected);
 	reset_record_state(channel);
 	return 0;
 }
@@ -214,7 +214,7 @@ static int copy_plaintext(struct sc1777y_secure_channel *channel, uint8_t *data,
 	size_t copied = MIN(size, available);
 
 	memcpy(data, &channel->plain_cache[channel->plain_offset], copied);
-	memset(&channel->plain_cache[channel->plain_offset], 0, copied);
+	sc1777y_secure_zero(&channel->plain_cache[channel->plain_offset], copied);
 	channel->plain_offset += copied;
 	if (channel->plain_offset == channel->plain_len) {
 		channel->plain_offset = 0U;

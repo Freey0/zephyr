@@ -215,6 +215,17 @@ static int run_record_send(struct test_gateway *gateway, int client_fd, uint8_t 
 	size_t offset = 0U;
 	int ret;
 
+	if (gateway->mode == TEST_GATEWAY_RECORD_HEADER_STALL) {
+		return wait_for_peer_close(client_fd);
+	}
+
+	if (gateway->mode == TEST_GATEWAY_RECORD_PARTIAL_STALL) {
+		(void)encode_record((const uint8_t *)"partial", 7U, record);
+
+		ret = send_all(client_fd, record, TEST_GATEWAY_RECORD_HEADER_LEN + 3U);
+		return ret < 0 ? ret : wait_for_peer_close(client_fd);
+	}
+
 	if (gateway->mode == TEST_GATEWAY_RECORD_BAD_PADDING) {
 		memset(record, 0, 36U);
 		record[0] = 2U;
@@ -335,6 +346,10 @@ static int run_gateway(struct test_gateway *gateway)
 		ret = 0;
 		goto out;
 	}
+	if (gateway->mode == TEST_GATEWAY_HANDSHAKE_STALL) {
+		ret = wait_for_peer_close(client_fd);
+		goto out;
+	}
 
 	request_sn = sys_get_be16(&request[6]);
 	response[0] = 1U;
@@ -384,8 +399,10 @@ static int run_gateway(struct test_gateway *gateway)
 		} else {
 			ret = wait_for_peer_close(client_fd);
 		}
-	} else if ((gateway->mode >= TEST_GATEWAY_RECORD_SEND) &&
-		   (gateway->mode <= TEST_GATEWAY_RECORD_EMPTY)) {
+	} else if (((gateway->mode >= TEST_GATEWAY_RECORD_SEND) &&
+		    (gateway->mode <= TEST_GATEWAY_RECORD_EMPTY)) ||
+		   (gateway->mode == TEST_GATEWAY_RECORD_HEADER_STALL) ||
+		   (gateway->mode == TEST_GATEWAY_RECORD_PARTIAL_STALL)) {
 		ret = run_record_send(gateway, client_fd, request);
 	}
 

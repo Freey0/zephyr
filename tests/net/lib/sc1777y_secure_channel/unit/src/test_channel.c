@@ -13,6 +13,7 @@
 #define SC1777Y_NODE DT_ALIAS(sc1777y_0)
 
 static const uint8_t certificate[] = {0x01};
+static const uint8_t maximum_certificate[SC1777Y_SECURE_MAX_CERTIFICATE_LEN];
 static const uint8_t platform_public_key[SC1777Y_PLATFORM_PUBLIC_KEY_LEN] = {0};
 static const uint8_t zero_tx_work[SC1777Y_SECURE_MAX_HANDSHAKE_LEN];
 static const uint8_t zero_rx_record[SC1777Y_SECURE_MAX_RECORD_LEN];
@@ -115,11 +116,22 @@ ZTEST(sc1777y_secure_channel, test_init_rejects_invalid_timeouts_and_credentials
 
 	config = valid_config(&gateway);
 	config.certificate_len = SC1777Y_SECURE_MAX_CERTIFICATE_LEN + 1U;
-	zassert_equal(-EINVAL, sc1777y_secure_channel_init(&channel, &config));
+	zassert_equal(-EMSGSIZE, sc1777y_secure_channel_init(&channel, &config));
 
 	config = valid_config(&gateway);
 	config.platform_public_key = NULL;
 	zassert_equal(-EINVAL, sc1777y_secure_channel_init(&channel, &config));
+}
+
+ZTEST(sc1777y_secure_channel, test_init_accepts_maximum_certificate_length)
+{
+	struct sc1777y_secure_channel channel;
+	struct sockaddr_in gateway;
+	struct sc1777y_secure_channel_config config = valid_config(&gateway);
+
+	config.certificate = maximum_certificate;
+	config.certificate_len = sizeof(maximum_certificate);
+	zassert_ok(sc1777y_secure_channel_init(&channel, &config));
 }
 
 ZTEST(sc1777y_secure_channel, test_init_rejects_unsupported_platform_types)
@@ -199,7 +211,27 @@ ZTEST(sc1777y_secure_channel, test_connect_completes_handshake_before_return)
 	zassert_equal(SC1777Y_SECURE_CHANNEL_ESTABLISHED,
 		      sc1777y_secure_channel_get_state(&channel));
 	zassert_true(test_gateway_saw_confirm(&gateway));
+	zassert_mem_equal(channel.tx_work, zero_tx_work, sizeof(channel.tx_work));
 	zassert_ok(sc1777y_secure_channel_close(&channel));
+}
+
+ZTEST(sc1777y_secure_channel, test_blocking_handshake_timeout_fails_channel)
+{
+	struct test_gateway gateway;
+	struct sc1777y_secure_channel channel;
+	struct sc1777y_secure_channel_config config;
+
+	test_gateway_start(&gateway, TEST_GATEWAY_HANDSHAKE_STALL);
+	test_channel_config(&config, test_gateway_address(&gateway));
+	config.io_timeout_ms = 50;
+	zassert_ok(sc1777y_secure_channel_init(&channel, &config));
+	memset(channel.tx_work, 0x5a, sizeof(channel.tx_work));
+	zassert_equal(-ETIMEDOUT, sc1777y_secure_channel_connect(&channel));
+	zassert_equal(SC1777Y_SECURE_CHANNEL_FAILED,
+		      sc1777y_secure_channel_get_state(&channel));
+	zassert_equal(-1, channel.socket_fd);
+	assert_transient_state_cleared(&channel);
+	test_gateway_wait(&gateway);
 }
 
 ZTEST(sc1777y_secure_channel, test_send_before_connect_returns_not_connected)

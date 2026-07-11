@@ -13,6 +13,11 @@ static int socket_error(void)
 	return errno == 0 ? -EIO : -errno;
 }
 
+static int blocking_io_error(void)
+{
+	return ((errno == EAGAIN) || (errno == EWOULDBLOCK)) ? -ETIMEDOUT : socket_error();
+}
+
 void sc1777y_secure_socket_close(struct sc1777y_secure_channel *channel)
 {
 	int socket_fd = channel->socket_fd;
@@ -160,7 +165,7 @@ int sc1777y_secure_socket_send_all(struct sc1777y_secure_channel *channel,
 			return sc1777y_secure_channel_fail(channel, -ECONNRESET);
 		}
 		if (errno != EINTR) {
-			return sc1777y_secure_channel_fail(channel, socket_error());
+			return sc1777y_secure_channel_fail(channel, blocking_io_error());
 		}
 	}
 
@@ -183,7 +188,7 @@ int sc1777y_secure_socket_recv_exact(struct sc1777y_secure_channel *channel,
 			return sc1777y_secure_channel_fail(channel, -ECONNRESET);
 		}
 		if (errno != EINTR) {
-			return sc1777y_secure_channel_fail(channel, socket_error());
+			return sc1777y_secure_channel_fail(channel, blocking_io_error());
 		}
 	}
 

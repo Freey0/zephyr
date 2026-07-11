@@ -11,6 +11,16 @@
 
 #include <zephyr/net/sc1777y_secure_channel.h>
 
+static inline void sc1777y_secure_zero(void *buffer, size_t len)
+{
+	volatile uint8_t *bytes = buffer;
+
+	while (len > 0U) {
+		*bytes++ = 0U;
+		--len;
+	}
+}
+
 struct sc1777y_secure_handshake_response {
 	uint16_t sn;
 	uint8_t auth_factor[SC1777Y_AUTH_FACTOR_LEN];

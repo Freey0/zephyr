@@ -28,8 +28,8 @@ static int validate_gateway(const struct sockaddr *gateway, socklen_t gateway_le
 
 void sc1777y_secure_channel_clear_rx(struct sc1777y_secure_channel *channel)
 {
-	memset(channel->rx_record, 0, sizeof(channel->rx_record));
-	memset(channel->plain_cache, 0, sizeof(channel->plain_cache));
+	sc1777y_secure_zero(channel->rx_record, sizeof(channel->rx_record));
+	sc1777y_secure_zero(channel->plain_cache, sizeof(channel->plain_cache));
 	channel->header_used = 0U;
 	channel->record_expected = 0U;
 	channel->record_used = 0U;
@@ -40,7 +40,7 @@ void sc1777y_secure_channel_clear_rx(struct sc1777y_secure_channel *channel)
 static void cleanup_channel(struct sc1777y_secure_channel *channel)
 {
 	sc1777y_secure_socket_close(channel);
-	memset(channel->tx_work, 0, sizeof(channel->tx_work));
+	sc1777y_secure_zero(channel->tx_work, sizeof(channel->tx_work));
 	sc1777y_secure_channel_clear_rx(channel);
 }
 
@@ -67,9 +67,11 @@ int sc1777y_secure_channel_init(struct sc1777y_secure_channel *channel,
 	}
 
 	if ((config->certificate == NULL) || (config->certificate_len == 0U) ||
-	    (config->certificate_len > SC1777Y_SECURE_MAX_CERTIFICATE_LEN) ||
 	    (config->platform_public_key == NULL)) {
 		return -EINVAL;
+	}
+	if (config->certificate_len > SC1777Y_SECURE_MAX_CERTIFICATE_LEN) {
+		return -EMSGSIZE;
 	}
 
 	if ((config->platform_type != SC1777Y_PLATFORM_NANRUI) &&
@@ -86,7 +88,7 @@ int sc1777y_secure_channel_init(struct sc1777y_secure_channel *channel,
 	k_mutex_init(&channel->tx_lock);
 	k_mutex_init(&channel->rx_lock);
 	k_mutex_init(&channel->crypto_lock);
-	memset(channel->tx_work, 0, sizeof(channel->tx_work));
+	sc1777y_secure_zero(channel->tx_work, sizeof(channel->tx_work));
 	sc1777y_secure_channel_clear_rx(channel);
 
 	return 0;

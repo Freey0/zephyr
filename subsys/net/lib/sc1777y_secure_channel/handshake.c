@@ -13,26 +13,28 @@
 int sc1777y_secure_handshake(struct sc1777y_secure_channel *channel)
 {
 	const struct device *dev = channel->config.sc1777y;
-	uint8_t en_r1[SC1777Y_SESSION_RANDOM_LEN];
-	uint8_t sn_bytes[sizeof(uint16_t)];
-	uint8_t request_hash[SC1777Y_HASH_LEN];
-	uint8_t request_signature[SC1777Y_SIGNATURE_LEN];
-	uint8_t response_frame[SC1777Y_SECURE_RESPONSE_LEN];
-	uint8_t response_hash[SC1777Y_HASH_LEN];
-	uint8_t auth_result[SC1777Y_AUTH_RESPONSE_LEN];
-	uint8_t dk_hash[SC1777Y_SESSION_DKHASH_LEN];
-	struct sc1777y_secure_handshake_response response;
+	uint8_t en_r1[SC1777Y_SESSION_RANDOM_LEN] = {0};
+	uint8_t sn_bytes[sizeof(uint16_t)] = {0};
+	uint8_t request_hash[SC1777Y_HASH_LEN] = {0};
+	uint8_t request_signature[SC1777Y_SIGNATURE_LEN] = {0};
+	uint8_t response_frame[SC1777Y_SECURE_RESPONSE_LEN] = {0};
+	uint8_t response_hash[SC1777Y_HASH_LEN] = {0};
+	uint8_t auth_result[SC1777Y_AUTH_RESPONSE_LEN] = {0};
+	uint8_t dk_hash[SC1777Y_SESSION_DKHASH_LEN] = {0};
+	struct sc1777y_secure_handshake_response response = {0};
 	size_t request_body_len;
 	size_t request_len;
 	size_t confirm_len;
 	uint16_t request_sn;
+	bool crypto_locked = false;
 	int ret;
 
 	channel->state = SC1777Y_SECURE_CHANNEL_NEGOTIATING;
 	ret = k_mutex_lock(&channel->crypto_lock, K_FOREVER);
 	if (ret < 0) {
-		return sc1777y_secure_channel_fail(channel, ret);
+		goto out;
 	}
+	crypto_locked = true;
 
 	ret = sc1777y_set_platform_type(dev, channel->config.platform_type);
 	if (ret < 0) {
@@ -116,6 +118,18 @@ int sc1777y_secure_handshake(struct sc1777y_secure_channel *channel)
 	}
 
 out:
-	(void)k_mutex_unlock(&channel->crypto_lock);
+	sc1777y_secure_zero(en_r1, sizeof(en_r1));
+	sc1777y_secure_zero(sn_bytes, sizeof(sn_bytes));
+	sc1777y_secure_zero(request_hash, sizeof(request_hash));
+	sc1777y_secure_zero(request_signature, sizeof(request_signature));
+	sc1777y_secure_zero(response_frame, sizeof(response_frame));
+	sc1777y_secure_zero(response_hash, sizeof(response_hash));
+	sc1777y_secure_zero(auth_result, sizeof(auth_result));
+	sc1777y_secure_zero(dk_hash, sizeof(dk_hash));
+	sc1777y_secure_zero(&response, sizeof(response));
+	sc1777y_secure_zero(channel->tx_work, sizeof(channel->tx_work));
+	if (crypto_locked) {
+		(void)k_mutex_unlock(&channel->crypto_lock);
+	}
 	return ret < 0 ? sc1777y_secure_channel_fail(channel, ret) : 0;
 }
