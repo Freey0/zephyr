@@ -59,7 +59,6 @@ class ReconnectableSecurityGatewayPeer(SecurityGatewayPeer):
         super().__init__(listen_addr=listen_addr, upstream_addr=upstream_addr)
         self._terminal_condition = threading.Condition()
         self._controlled_terminal: socket.socket | None = None
-        self._disconnect_requested: socket.socket | None = None
 
     def _set_controlled_terminal(self, terminal: socket.socket | None) -> None:
         with self._terminal_condition:
@@ -67,7 +66,7 @@ class ReconnectableSecurityGatewayPeer(SecurityGatewayPeer):
             self._terminal_condition.notify_all()
 
     def disconnect_terminal(self, timeout: float) -> None:
-        """Close only the active terminal socket, leaving the listener running."""
+        """Shut down the active terminal and wait for its worker to exit."""
         deadline = time.monotonic() + timeout
         with self._terminal_condition:
             while self._controlled_terminal is None:
@@ -76,28 +75,27 @@ class ReconnectableSecurityGatewayPeer(SecurityGatewayPeer):
                     raise TimeoutError("security gateway has no active terminal connection")
                 self._terminal_condition.wait(remaining)
             terminal = self._controlled_terminal
-            self._disconnect_requested = terminal
 
         with suppress(OSError):
             terminal.shutdown(socket.SHUT_RDWR)
-        with suppress(OSError):
-            terminal.close()
+
+        with self._terminal_condition:
+            while self._controlled_terminal is terminal:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        "security gateway terminal worker did not exit"
+                    )
+                self._terminal_condition.wait(remaining)
 
     def _serve_connection(self, terminal: socket.socket) -> None:
         self._set_controlled_terminal(terminal)
         try:
-            try:
-                super()._serve_connection(terminal)
-            except (ConnectionError, OSError, ValueError):
-                with self._terminal_condition:
-                    if self._disconnect_requested is not terminal:
-                        raise
+            super()._serve_connection(terminal)
         finally:
             with self._terminal_condition:
                 if self._controlled_terminal is terminal:
                     self._controlled_terminal = None
-                if self._disconnect_requested is terminal:
-                    self._disconnect_requested = None
                 self._terminal_condition.notify_all()
 
 
