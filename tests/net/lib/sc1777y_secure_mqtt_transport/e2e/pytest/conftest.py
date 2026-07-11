@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -47,6 +48,57 @@ MOSQUITTO_CONFIG = (
 
 class TapFixtureError(RuntimeError):
     """A diagnostic failure while creating, validating, or removing the TAP."""
+
+
+class ReconnectableSecurityGatewayPeer(SecurityGatewayPeer):
+    """Security gateway with a test-controlled terminal-side disconnect."""
+
+    def __init__(
+        self, listen_addr: tuple[str, int], upstream_addr: tuple[str, int]
+    ) -> None:
+        super().__init__(listen_addr=listen_addr, upstream_addr=upstream_addr)
+        self._terminal_condition = threading.Condition()
+        self._controlled_terminal: socket.socket | None = None
+        self._disconnect_requested: socket.socket | None = None
+
+    def _set_controlled_terminal(self, terminal: socket.socket | None) -> None:
+        with self._terminal_condition:
+            self._controlled_terminal = terminal
+            self._terminal_condition.notify_all()
+
+    def disconnect_terminal(self, timeout: float) -> None:
+        """Close only the active terminal socket, leaving the listener running."""
+        deadline = time.monotonic() + timeout
+        with self._terminal_condition:
+            while self._controlled_terminal is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("security gateway has no active terminal connection")
+                self._terminal_condition.wait(remaining)
+            terminal = self._controlled_terminal
+            self._disconnect_requested = terminal
+
+        with suppress(OSError):
+            terminal.shutdown(socket.SHUT_RDWR)
+        with suppress(OSError):
+            terminal.close()
+
+    def _serve_connection(self, terminal: socket.socket) -> None:
+        self._set_controlled_terminal(terminal)
+        try:
+            try:
+                super()._serve_connection(terminal)
+            except (ConnectionError, OSError, ValueError):
+                with self._terminal_condition:
+                    if self._disconnect_requested is not terminal:
+                        raise
+        finally:
+            with self._terminal_condition:
+                if self._controlled_terminal is terminal:
+                    self._controlled_terminal = None
+                if self._disconnect_requested is terminal:
+                    self._disconnect_requested = None
+                self._terminal_condition.notify_all()
 
 
 def _require_program(name: str) -> Path:
@@ -342,13 +394,13 @@ class _SecureGatewayEnvironment:
     def __init__(self, setup_script: Path) -> None:
         self.setup_script = setup_script
         self.tap_start_attempted = False
-        self.gateway: SecurityGatewayPeer | None = None
+        self.gateway: ReconnectableSecurityGatewayPeer | None = None
 
-    def start(self) -> SecurityGatewayPeer:
+    def start(self) -> ReconnectableSecurityGatewayPeer:
         self.tap_start_attempted = True
         _run_net_setup(self.setup_script, "start")
         _verify_tap()
-        self.gateway = SecurityGatewayPeer(
+        self.gateway = ReconnectableSecurityGatewayPeer(
             listen_addr=(GATEWAY_HOST, GATEWAY_PORT),
             upstream_addr=(BROKER_HOST, BROKER_PORT),
         )
@@ -467,7 +519,7 @@ def secure_gateway(
     mosquitto_broker: MosquittoBroker,
     upstream_subscriber: MosquittoSubscriber,
     publish_downlink_qos1: Callable[[str], None],
-) -> Generator[SecurityGatewayPeer, None, None]:
+) -> Generator[ReconnectableSecurityGatewayPeer, None, None]:
     del mosquitto_broker, upstream_subscriber, publish_downlink_qos1
     net_tools = os.environ.get("NET_TOOLS_BASE")
     if not net_tools:

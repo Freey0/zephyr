@@ -21,6 +21,7 @@
 #define MQTT_BUFFER_SIZE 4096U
 #define SUBSCRIBE_MESSAGE_ID 1U
 #define UPSTREAM_MESSAGE_ID 2U
+#define POST_RECONNECT_MESSAGE_ID 3U
 #define EVENT_LOOP_DELAY_MS 10
 #define EVENT_LOOP_TIMEOUT_MS 20000
 
@@ -30,6 +31,7 @@ static const uint8_t platform_public_key[SC1777Y_PLATFORM_PUBLIC_KEY_LEN] = {
 };
 static const uint8_t mqtt_client_id[] = "sc1777y-terminal-" DEVICE_ID;
 static const uint8_t qos1_upstream_payload[] = "phase2-qos1-upstream";
+static const uint8_t post_reconnect_payload[] = "phase2-after-reconnect";
 static const uint8_t expected_downlink_payload[] = "phase2-downstream";
 
 static struct sc1777y_secure_channel secure_channel;
@@ -48,6 +50,10 @@ struct acceptance_state {
 	bool downlink_acked;
 	bool pingresp_received;
 	bool disconnect_received;
+	bool reconnect_attempted;
+	bool post_reconnect_sent;
+	bool post_reconnect_acked;
+	uint8_t connection_count;
 	int error;
 };
 
@@ -115,6 +121,20 @@ static int publish_acceptance_messages(void)
 			      MQTT_QOS_1_AT_LEAST_ONCE, UPSTREAM_MESSAGE_ID);
 	if (ret == 0) {
 		state.qos1_upstream_sent = true;
+	}
+
+	return ret;
+}
+
+static int publish_post_reconnect_message(void)
+{
+	int ret;
+
+	ret = publish_message(TOPIC_TEST_UP, post_reconnect_payload,
+			      sizeof(post_reconnect_payload) - 1U,
+			      MQTT_QOS_1_AT_LEAST_ONCE, POST_RECONNECT_MESSAGE_ID);
+	if (ret == 0) {
+		state.post_reconnect_sent = true;
 	}
 
 	return ret;
@@ -188,6 +208,7 @@ static void mqtt_event_handler(struct mqtt_client *client, const struct mqtt_evt
 			break;
 		}
 		state.connack_received = true;
+		state.connection_count++;
 		ret = subscribe_downlink();
 		if (ret < 0) {
 			record_error("MQTT subscribe", ret);
@@ -203,19 +224,30 @@ static void mqtt_event_handler(struct mqtt_client *client, const struct mqtt_evt
 		}
 		state.suback_received = true;
 		printk("MQTT_SUBSCRIBED\n");
-		ret = publish_acceptance_messages();
+		if (state.reconnect_attempted) {
+			ret = publish_post_reconnect_message();
+		} else {
+			ret = publish_acceptance_messages();
+		}
 		if (ret < 0) {
 			record_error("MQTT publish", ret);
 		}
 		break;
 	case MQTT_EVT_PUBACK:
-		if (event->result != 0 ||
-		    event->param.puback.message_id != UPSTREAM_MESSAGE_ID) {
-			record_error("MQTT PUBACK", event->result != 0 ? event->result : -EPROTO);
+		if (event->result != 0) {
+			record_error("MQTT PUBACK", event->result);
 			break;
 		}
-		state.qos1_upstream_acked = true;
-		printk("MQTT_UPSTREAM_PUBACK\n");
+		if (event->param.puback.message_id == UPSTREAM_MESSAGE_ID) {
+			state.qos1_upstream_acked = true;
+			printk("MQTT_UPSTREAM_PUBACK\n");
+		} else if (event->param.puback.message_id == POST_RECONNECT_MESSAGE_ID &&
+			   state.reconnect_attempted) {
+			state.post_reconnect_acked = true;
+			printk("MQTT_RECONNECT_PUBACK\n");
+		} else {
+			record_error("MQTT PUBACK", -EPROTO);
+		}
 		break;
 	case MQTT_EVT_PUBLISH:
 		ret = receive_downlink(client, &event->param.publish);
@@ -233,7 +265,9 @@ static void mqtt_event_handler(struct mqtt_client *client, const struct mqtt_evt
 		break;
 	case MQTT_EVT_DISCONNECT:
 		state.disconnect_received = true;
-		if (event->result != 0) {
+		/* The event loop owns the one retry after the first PUBACK. */
+		if (event->result != 0 &&
+		    (!state.qos1_upstream_acked || state.reconnect_attempted)) {
 			record_error("MQTT disconnect event", event->result);
 		}
 		break;
@@ -244,10 +278,17 @@ static void mqtt_event_handler(struct mqtt_client *client, const struct mqtt_evt
 
 static bool acceptance_flow_complete(void)
 {
-	return state.connack_received && state.suback_received &&
-	       state.qos0_publish_count == 2U && state.qos1_upstream_sent &&
-	       state.qos1_upstream_acked && state.downlink_received &&
-	       state.downlink_acked && state.pingresp_received;
+	bool complete = state.connack_received && state.suback_received &&
+			state.qos0_publish_count == 2U && state.qos1_upstream_sent &&
+			state.qos1_upstream_acked && state.downlink_received &&
+			state.downlink_acked && state.pingresp_received;
+
+	if (state.reconnect_attempted) {
+		complete = complete && state.connection_count == 2U &&
+			   state.post_reconnect_sent && state.post_reconnect_acked;
+	}
+
+	return complete;
 }
 
 static void configure_mqtt_client(void)
@@ -262,6 +303,44 @@ static void configure_mqtt_client(void)
 	mqtt_client.keepalive = 5U;
 	mqtt_client.protocol_version = MQTT_VERSION_3_1_1;
 	mqtt_client.clean_session = 1U;
+}
+
+static int initialize_mqtt_client(void)
+{
+	int ret;
+
+	mqtt_client_init(&mqtt_client);
+	configure_mqtt_client();
+	ret = sc1777y_secure_mqtt_transport_bind(&mqtt_client, &secure_channel);
+	if (ret < 0) {
+		return ret;
+	}
+
+	return mqtt_connect(&mqtt_client);
+}
+
+static int reconnect_mqtt(
+	const struct sc1777y_secure_channel_config *secure_config)
+{
+	int ret;
+
+	state.reconnect_attempted = true;
+	state.disconnect_received = false;
+	state.downlink_received = false;
+	state.downlink_acked = false;
+	state.pingresp_received = false;
+	printk("MQTT_RECONNECTING\n");
+
+	ret = sc1777y_secure_channel_close(&secure_channel);
+	if (ret < 0) {
+		return ret;
+	}
+	ret = sc1777y_secure_channel_init(&secure_channel, secure_config);
+	if (ret < 0) {
+		return ret;
+	}
+
+	return initialize_mqtt_client();
 }
 
 int main(void)
@@ -303,14 +382,7 @@ int main(void)
 		printk("secure channel init failed: %d\n", ret);
 		return 1;
 	}
-	mqtt_client_init(&mqtt_client);
-	configure_mqtt_client();
-	ret = sc1777y_secure_mqtt_transport_bind(&mqtt_client, &secure_channel);
-	if (ret < 0) {
-		printk("secure MQTT transport bind failed: %d\n", ret);
-		return 1;
-	}
-	ret = mqtt_connect(&mqtt_client);
+	ret = initialize_mqtt_client();
 	if (ret < 0) {
 		printk("MQTT connect failed: %d\n", ret);
 		(void)sc1777y_secure_channel_close(&secure_channel);
@@ -321,12 +393,30 @@ int main(void)
 	       !acceptance_flow_complete()) {
 		ret = mqtt_input(&mqtt_client);
 		if (ret < 0 && ret != -EAGAIN) {
+			if (state.qos1_upstream_acked && !state.reconnect_attempted) {
+				ret = reconnect_mqtt(&secure_config);
+				if (ret < 0) {
+					record_error("MQTT reconnect", ret);
+					break;
+				}
+				elapsed_ms = 0;
+				continue;
+			}
 			record_error("mqtt_input", ret);
 			break;
 		}
 
 		ret = mqtt_live(&mqtt_client);
 		if (ret < 0 && ret != -EAGAIN) {
+			if (state.qos1_upstream_acked && !state.reconnect_attempted) {
+				ret = reconnect_mqtt(&secure_config);
+				if (ret < 0) {
+					record_error("MQTT reconnect", ret);
+					break;
+				}
+				elapsed_ms = 0;
+				continue;
+			}
 			record_error("mqtt_live", ret);
 			break;
 		}
@@ -342,6 +432,7 @@ int main(void)
 		return 1;
 	}
 
+	state.disconnect_received = false;
 	ret = mqtt_disconnect(&mqtt_client, NULL);
 	if (ret < 0 || !state.disconnect_received) {
 		printk("MQTT disconnect failed: %d\n", ret);
@@ -349,5 +440,8 @@ int main(void)
 	}
 
 	printk("MQTT_SECURE_E2E_PASS\n");
+	if (state.reconnect_attempted) {
+		printk("MQTT_SECURE_RECONNECT_PASS\n");
+	}
 	return 0;
 }
