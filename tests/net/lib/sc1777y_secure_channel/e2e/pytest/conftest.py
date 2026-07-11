@@ -19,6 +19,7 @@ HOST_DIR = Path(__file__).resolve().parents[2] / "host"
 sys.path.insert(0, str(HOST_DIR))
 
 from security_gateway_peer import SecurityGatewayPeer  # noqa: E402
+from tap_gate_lock import tap_gate_lock  # noqa: E402
 
 LOGGER = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ class _TcpEchoService:
             while not self.stop_event.is_set():
                 try:
                     connection, _ = self.listener.accept()
-                except socket.timeout:
+                except TimeoutError:
                     continue
                 except OSError:
                     if self.stop_event.is_set():
@@ -188,21 +189,24 @@ def secure_gateway() -> Generator[SecurityGatewayPeer, None, None]:
     if not setup_script.is_file() or not os.access(setup_script, os.X_OK):
         pytest.fail(f"required executable does not exist: {setup_script}")
 
-    environment = _SecureGatewayEnvironment(setup_script)
-    primary_error: BaseException | None = None
-    try:
+    with tap_gate_lock():
+        environment = _SecureGatewayEnvironment(setup_script)
+        primary_error: BaseException | None = None
         try:
-            gateway = environment.start()
+            try:
+                gateway = environment.start()
+            except BaseException as error:
+                pytest.fail(f"secure gateway setup failed: {error!r}", pytrace=False)
+            yield gateway
         except BaseException as error:
-            pytest.fail(f"secure gateway setup failed: {error!r}", pytrace=False)
-        yield gateway
-    except BaseException as error:
-        primary_error = error
-        raise
-    finally:
-        cleanup_errors = environment.stop()
-        if cleanup_errors:
-            details = "; ".join(cleanup_errors)
-            if primary_error is None:
-                pytest.fail(f"secure gateway cleanup failed: {details}", pytrace=False)
-            LOGGER.error("secure gateway cleanup also failed: %s", details)
+            primary_error = error
+            raise
+        finally:
+            cleanup_errors = environment.stop()
+            if cleanup_errors:
+                details = "; ".join(cleanup_errors)
+                if primary_error is None:
+                    pytest.fail(
+                        f"secure gateway cleanup failed: {details}", pytrace=False
+                    )
+                LOGGER.error("secure gateway cleanup also failed: %s", details)

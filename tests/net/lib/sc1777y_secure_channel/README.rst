@@ -1,11 +1,12 @@
+############################
 SC1777Y secure-channel tests
-============================
+############################
 
 The phase-one gate contains both the ztest unit/component suite and the
 native_sim TAP end-to-end test.  Run the complete gate from the Zephyr source
 directory with:
 
-.. code-block:: console
+.. code-block:: shell
 
    west twister -T tests/net/lib/sc1777y_secure_channel -p native_sim \
      --inline-logs --outdir build/twister_secure_channel_phase1
@@ -14,8 +15,9 @@ The TAP end-to-end case is mandatory.  Do not filter or skip it, and do not
 treat a missing host dependency or insufficient privilege as a successful
 test run.
 
+******************
 Host prerequisites
-------------------
+******************
 
 * Run as root, or configure ``sudo`` so that the stock Zephyr
   ``net-setup.sh`` can elevate non-interactively.  That helper unconditionally
@@ -27,7 +29,7 @@ Host prerequisites
 * Set ``NET_TOOLS_BASE`` to the Zephyr net-tools directory containing an
   executable ``net-setup.sh``.  For example:
 
-  .. code-block:: console
+  .. code-block:: shell
 
      export NET_TOOLS_BASE=/path/to/zephyrproject/tools/net-tools
 
@@ -44,8 +46,9 @@ terminates the deterministic secure protocol and forwards plaintext to a
 host TCP echo service.  The SC1777Y SPI emulator remains behind the public
 driver API and is not controlled or inspected by this test.
 
+*************************
 Combined secure MQTT gate
--------------------------
+*************************
 
 After enabling the MQTT custom transport, use the mandatory combined gate in
 ``tests/net/lib/sc1777y_secure_mqtt_transport/README.rst``.  That command runs

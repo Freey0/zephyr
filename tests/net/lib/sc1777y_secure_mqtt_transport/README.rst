@@ -1,12 +1,13 @@
+###################################
 SC1777Y secure MQTT transport tests
-===================================
+###################################
 
 The default release gate runs all four native_sim test instances: the secure
 channel unit suite, the secure-channel TAP echo end-to-end test, the MQTT
 adapter unit suite, and the secure MQTT TAP end-to-end test against a real
 Mosquitto Broker.  Run it from the Zephyr source directory exactly as follows:
 
-.. code-block:: console
+.. code-block:: shell
 
    west twister \
      -T tests/net/lib/sc1777y_secure_channel \
@@ -19,8 +20,9 @@ filter, ``--build-only``, or any other option that omits either case.  A
 missing host dependency or insufficient privilege is a failed gate, not a
 skip or successful run.
 
+******************
 Host prerequisites
-------------------
+******************
 
 * Run as root, or configure ``sudo`` so that the stock Zephyr
   ``net-setup.sh`` can elevate non-interactively.  The stock helper checks its
@@ -32,7 +34,7 @@ Host prerequisites
 * Set ``NET_TOOLS_BASE`` to the Zephyr net-tools directory that contains an
   executable ``net-setup.sh``.  For example:
 
-  .. code-block:: console
+  .. code-block:: shell
 
      export NET_TOOLS_BASE=/path/to/zephyrproject/tools/net-tools
 
@@ -45,8 +47,16 @@ Host prerequisites
   Do not pre-create ``zeth`` or assign either address elsewhere while the gate
   is running.
 
-The terminal opens one TCP connection to ``SecurityGatewayPeer`` at
-``192.0.2.2:18883``.  The peer completes the deterministic SC1777Y session
-handshake and then transparently proxies decrypted MQTT bytes to the isolated
-local Mosquitto Broker.  Test-side observation and downlink publication use
+The two TAP fixtures use the same cross-process advisory lock at
+``/tmp/zephyr-sc1777y-zeth.lock``.  Twister may build and run unrelated tests
+concurrently, but only one fixture can own ``zeth``; the lock is held from
+before TAP setup until after gateway and TAP cleanup.
+
+During each security session, the terminal maintains exactly one TCP
+connection to ``SecurityGatewayPeer`` at ``192.0.2.2:18883``.  A reconnect
+closes the failed connection and establishes a new connection and security
+session; it never creates a simultaneous connection or a direct connection to
+the Broker.  The peer completes the deterministic SC1777Y session handshake
+and then transparently proxies decrypted MQTT bytes to the isolated local
+Mosquitto Broker.  Test-side observation and downlink publication use
 ``mosquitto_sub`` and ``mosquitto_pub`` respectively.
