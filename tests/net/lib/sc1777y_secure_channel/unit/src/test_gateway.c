@@ -14,6 +14,9 @@
 
 #define TEST_GATEWAY_RESPONSE_LEN 230U
 #define TEST_GATEWAY_CONFIRM_LEN 184U
+#define TEST_GATEWAY_RECORD_HEADER_LEN 4U
+#define TEST_GATEWAY_RECORD_FIXED_LEN 20U
+#define TEST_GATEWAY_CRYPTO_MASK 0xa5U
 
 static int recv_exact(int fd, uint8_t *data, size_t len)
 {
@@ -75,6 +78,218 @@ static int send_fragmented_response(int fd, const uint8_t *response, size_t len)
 	}
 
 	return send_all(fd, &response[offset], len - offset);
+}
+
+static int decode_plaintext(const uint8_t *record, size_t record_len, uint8_t *plaintext,
+			    size_t plaintext_size, size_t *plaintext_len)
+{
+	size_t ciphertext_len;
+	size_t marker;
+
+	if ((record_len < TEST_GATEWAY_RECORD_FIXED_LEN) || (record[0] != 2U) ||
+	    (record[1] != 0U) || (sys_get_be16(&record[2]) != record_len)) {
+		return -EPROTO;
+	}
+
+	ciphertext_len = record_len - TEST_GATEWAY_RECORD_FIXED_LEN;
+	if ((ciphertext_len == 0U) || ((ciphertext_len % SC1777Y_IV_LEN) != 0U) ||
+	    (ciphertext_len > plaintext_size)) {
+		return -EBADMSG;
+	}
+
+	for (size_t i = 0U; i < ciphertext_len; ++i) {
+		plaintext[i] = record[TEST_GATEWAY_RECORD_FIXED_LEN + i] ^
+			       TEST_GATEWAY_CRYPTO_MASK;
+	}
+
+	marker = ciphertext_len;
+	while ((marker > 0U) && (plaintext[marker - 1U] == 0U)) {
+		--marker;
+	}
+	if ((marker == 0U) || (plaintext[marker - 1U] != 0x80U) ||
+	    (ciphertext_len - marker >= SC1777Y_IV_LEN)) {
+		return -EBADMSG;
+	}
+
+	*plaintext_len = marker - 1U;
+	return 0;
+}
+
+static size_t encode_record(const uint8_t *plaintext, size_t plaintext_len, uint8_t *record);
+
+static int run_record_echo(struct test_gateway *gateway, int client_fd, uint8_t *record,
+			   size_t record_size)
+{
+	uint8_t plaintext[SC1777Y_SECURE_MAX_CIPHERTEXT_LEN];
+	size_t echo_offset = 0U;
+
+	while (gateway->record_data_len < gateway->expected_plaintext_len) {
+		size_t plaintext_len;
+		size_t record_len;
+		int ret;
+
+		ret = recv_exact(client_fd, record, TEST_GATEWAY_RECORD_HEADER_LEN);
+		if (ret < 0) {
+			return ret;
+		}
+		record_len = sys_get_be16(&record[2]);
+		if ((record_len < TEST_GATEWAY_RECORD_FIXED_LEN) || (record_len > record_size)) {
+			return -EPROTO;
+		}
+		ret = recv_exact(client_fd, &record[TEST_GATEWAY_RECORD_HEADER_LEN],
+				 record_len - TEST_GATEWAY_RECORD_HEADER_LEN);
+		if (ret < 0) {
+			return ret;
+		}
+		ret = decode_plaintext(record, record_len, plaintext, sizeof(plaintext),
+				       &plaintext_len);
+		if (ret < 0) {
+			return ret;
+		}
+		if (plaintext_len > sizeof(gateway->record_data) - gateway->record_data_len) {
+			return -EMSGSIZE;
+		}
+		memcpy(&gateway->record_data[gateway->record_data_len], plaintext, plaintext_len);
+		gateway->record_data_len += plaintext_len;
+		gateway->record_count++;
+	}
+
+	while (echo_offset < gateway->record_data_len) {
+		size_t chunk_len = MIN(gateway->record_data_len - echo_offset,
+				       SC1777Y_SECURE_MAX_PLAINTEXT_CHUNK);
+		size_t record_len = encode_record(&gateway->record_data[echo_offset], chunk_len,
+						  record);
+		int ret = send_all(client_fd, record, record_len);
+
+		if (ret < 0) {
+			return ret;
+		}
+		echo_offset += chunk_len;
+	}
+
+	return 0;
+}
+
+static size_t encode_record(const uint8_t *plaintext, size_t plaintext_len, uint8_t *record)
+{
+	size_t ciphertext_len = ROUND_UP(plaintext_len + 1U, SC1777Y_IV_LEN);
+	size_t record_len = TEST_GATEWAY_RECORD_FIXED_LEN + ciphertext_len;
+
+	record[0] = 2U;
+	record[1] = 0U;
+	sys_put_be16((uint16_t)record_len, &record[2]);
+	memset(&record[4], 0x3c, SC1777Y_IV_LEN);
+	for (size_t i = 0U; i < ciphertext_len; ++i) {
+		uint8_t padded = 0U;
+
+		if (i < plaintext_len) {
+			padded = plaintext[i];
+		} else if (i == plaintext_len) {
+			padded = 0x80U;
+		}
+
+		record[TEST_GATEWAY_RECORD_FIXED_LEN + i] = padded ^ TEST_GATEWAY_CRYPTO_MASK;
+	}
+
+	return record_len;
+}
+
+static int wait_for_peer_close(int client_fd)
+{
+	uint8_t byte;
+
+	for (;;) {
+		ssize_t ret = zsock_recv(client_fd, &byte, sizeof(byte), 0);
+
+		if (ret == 0) {
+			return 0;
+		}
+		if ((ret < 0) && (errno != EINTR)) {
+			return -errno;
+		}
+	}
+}
+
+static int run_record_send(struct test_gateway *gateway, int client_fd, uint8_t *record)
+{
+	size_t offset = 0U;
+	int ret;
+
+	if (gateway->mode == TEST_GATEWAY_RECORD_BAD_PADDING) {
+		memset(record, 0, 36U);
+		record[0] = 2U;
+		sys_put_be16(36U, &record[2]);
+		memset(&record[4], 0x3c, SC1777Y_IV_LEN);
+		memset(&record[TEST_GATEWAY_RECORD_FIXED_LEN], TEST_GATEWAY_CRYPTO_MASK,
+		       SC1777Y_IV_LEN);
+		ret = send_all(client_fd, record, 36U);
+		return ret < 0 ? ret : wait_for_peer_close(client_fd);
+	}
+
+	if (gateway->mode == TEST_GATEWAY_RECORD_BAD_LENGTH) {
+		memset(record, 0, 35U);
+		record[0] = 2U;
+		sys_put_be16(35U, &record[2]);
+		memset(&record[4], 0x3c, SC1777Y_IV_LEN);
+		ret = send_all(client_fd, record, 35U);
+		return ret < 0 ? ret : wait_for_peer_close(client_fd);
+	}
+
+	if (gateway->mode == TEST_GATEWAY_RECORD_HALF_CLOSE) {
+		memset(record, 0, 28U);
+		record[0] = 2U;
+		sys_put_be16(36U, &record[2]);
+		memset(&record[4], 0x3c, SC1777Y_IV_LEN);
+		return send_all(client_fd, record, 28U);
+	}
+
+	ret = k_sem_take(&gateway->record_ready, K_SECONDS(2));
+	if (ret < 0) {
+		return ret;
+	}
+
+	if (gateway->mode == TEST_GATEWAY_RECORD_COALESCED) {
+		size_t wire_len = 0U;
+
+		while (offset < gateway->record_data_len) {
+			size_t chunk_len = MIN(gateway->record_data_len - offset,
+					       SC1777Y_SECURE_MAX_PLAINTEXT_CHUNK);
+
+			wire_len += encode_record(&gateway->record_data[offset], chunk_len,
+						  &record[wire_len]);
+			gateway->record_count++;
+			offset += chunk_len;
+		}
+		ret = send_all(client_fd, record, wire_len);
+		return ret < 0 ? ret : wait_for_peer_close(client_fd);
+	}
+
+	while (offset < gateway->record_data_len) {
+		size_t chunk_len = MIN(gateway->record_data_len - offset,
+				       SC1777Y_SECURE_MAX_PLAINTEXT_CHUNK);
+		size_t record_len = encode_record(&gateway->record_data[offset], chunk_len, record);
+
+		if (gateway->mode == TEST_GATEWAY_RECORD_FRAGMENTED) {
+			ret = send_all(client_fd, record, 1U);
+			if (ret == 0) {
+				k_sem_give(&gateway->fragment_started);
+				ret = k_sem_take(&gateway->fragment_continue, K_SECONDS(2));
+			}
+			for (size_t i = 1U; (ret == 0) && (i < record_len); ++i) {
+				ret = send_all(client_fd, &record[i], 1U);
+				k_yield();
+			}
+		} else {
+			ret = send_all(client_fd, record, record_len);
+		}
+		if (ret < 0) {
+			return ret;
+		}
+		gateway->record_count++;
+		offset += chunk_len;
+	}
+
+	return wait_for_peer_close(client_fd);
 }
 
 static int run_gateway(struct test_gateway *gateway)
@@ -146,6 +361,19 @@ static int run_gateway(struct test_gateway *gateway)
 	if (ret == 0) {
 		gateway->saw_confirm = true;
 	}
+	if (ret < 0) {
+		goto out;
+	}
+
+	if (gateway->mode == TEST_GATEWAY_RECORD_ECHO) {
+		ret = run_record_echo(gateway, client_fd, request, sizeof(request));
+		if (ret == 0) {
+			ret = wait_for_peer_close(client_fd);
+		}
+	} else if ((gateway->mode >= TEST_GATEWAY_RECORD_SEND) &&
+		   (gateway->mode <= TEST_GATEWAY_RECORD_HALF_CLOSE)) {
+		ret = run_record_send(gateway, client_fd, request);
+	}
 
 out:
 	(void)zsock_close(client_fd);
@@ -189,6 +417,9 @@ void test_gateway_start(struct test_gateway *gateway, enum test_gateway_mode mod
 		   "getsockname failed: %d", errno);
 	zassert_ok(zsock_listen(gateway->listen_fd, 1), "listen failed: %d", errno);
 	k_sem_init(&gateway->done, 0, 1);
+	k_sem_init(&gateway->record_ready, 0, 1);
+	k_sem_init(&gateway->fragment_started, 0, 1);
+	k_sem_init(&gateway->fragment_continue, 0, 1);
 
 	k_thread_create(&gateway->thread, gateway->stack,
 			K_KERNEL_STACK_SIZEOF(gateway->stack), gateway_thread, gateway, NULL,
@@ -216,4 +447,40 @@ bool test_gateway_saw_confirm(struct test_gateway *gateway)
 {
 	test_gateway_wait(gateway);
 	return gateway->saw_confirm;
+}
+
+void test_gateway_expect_plaintext(struct test_gateway *gateway, size_t len)
+{
+	zassert_true(len <= sizeof(gateway->record_data));
+	gateway->expected_plaintext_len = len;
+}
+
+void test_gateway_queue_plaintext(struct test_gateway *gateway, const uint8_t *data, size_t len)
+{
+	zassert_not_null(data);
+	zassert_true(len <= sizeof(gateway->record_data));
+	memcpy(gateway->record_data, data, len);
+	gateway->record_data_len = len;
+	k_sem_give(&gateway->record_ready);
+}
+
+void test_gateway_wait_fragment(struct test_gateway *gateway)
+{
+	zassert_ok(k_sem_take(&gateway->fragment_started, K_SECONDS(2)),
+		   "gateway did not send first fragment");
+}
+
+void test_gateway_release_fragment(struct test_gateway *gateway)
+{
+	k_sem_give(&gateway->fragment_continue);
+}
+
+size_t test_gateway_record_count(const struct test_gateway *gateway)
+{
+	return gateway->record_count;
+}
+
+const uint8_t *test_gateway_record_data(const struct test_gateway *gateway)
+{
+	return gateway->record_data;
 }
