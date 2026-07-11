@@ -31,7 +31,7 @@ ZTEST(sc1777y_secure_protocol, test_pad_full_block_adds_another_block)
 	zassert_ok(sc1777y_secure_pad(buf, 16, sizeof(buf), &padded_len));
 	zassert_equal(32, padded_len);
 	zassert_equal(0x80, buf[16]);
-	zassert_mem_equal((uint8_t[15]){0}, &buf[17], 15);
+	zassert_mem_equal((uint8_t[15]) { 0 }, &buf[17], 15);
 }
 
 ZTEST(sc1777y_secure_protocol, test_pad_and_unpad_boundary_lengths)
