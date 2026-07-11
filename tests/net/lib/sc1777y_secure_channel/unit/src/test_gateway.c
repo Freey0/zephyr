@@ -243,6 +243,13 @@ static int run_record_send(struct test_gateway *gateway, int client_fd, uint8_t 
 		return send_all(client_fd, record, 28U);
 	}
 
+	if (gateway->mode == TEST_GATEWAY_RECORD_EMPTY) {
+		size_t record_len = encode_record(NULL, 0U, record);
+
+		ret = send_all(client_fd, record, record_len);
+		return ret < 0 ? ret : wait_for_peer_close(client_fd);
+	}
+
 	ret = k_sem_take(&gateway->record_ready, K_SECONDS(2));
 	if (ret < 0) {
 		return ret;
@@ -306,6 +313,7 @@ static int run_gateway(struct test_gateway *gateway)
 	if (client_fd < 0) {
 		return -errno;
 	}
+	gateway->connection_count++;
 
 	ret = recv_exact(client_fd, request, 4U);
 	if (ret < 0) {
@@ -370,8 +378,14 @@ static int run_gateway(struct test_gateway *gateway)
 		if (ret == 0) {
 			ret = wait_for_peer_close(client_fd);
 		}
+	} else if (gateway->mode == TEST_GATEWAY_RECORD_RECONNECT) {
+		if (gateway->connection_count == 1U) {
+			ret = run_record_send(gateway, client_fd, request);
+		} else {
+			ret = wait_for_peer_close(client_fd);
+		}
 	} else if ((gateway->mode >= TEST_GATEWAY_RECORD_SEND) &&
-		   (gateway->mode <= TEST_GATEWAY_RECORD_HALF_CLOSE)) {
+		   (gateway->mode <= TEST_GATEWAY_RECORD_EMPTY)) {
 		ret = run_record_send(gateway, client_fd, request);
 	}
 
@@ -387,6 +401,9 @@ static void gateway_thread(void *arg1, void *arg2, void *arg3)
 	ARG_UNUSED(arg2);
 	ARG_UNUSED(arg3);
 	gateway->result = run_gateway(gateway);
+	if ((gateway->result == 0) && (gateway->mode == TEST_GATEWAY_RECORD_RECONNECT)) {
+		gateway->result = run_gateway(gateway);
+	}
 	(void)zsock_close(gateway->listen_fd);
 	gateway->listen_fd = -1;
 	k_sem_give(&gateway->done);

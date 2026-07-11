@@ -20,6 +20,8 @@ enum test_gateway_mode {
 	TEST_GATEWAY_RECORD_BAD_PADDING,
 	TEST_GATEWAY_RECORD_BAD_LENGTH,
 	TEST_GATEWAY_RECORD_HALF_CLOSE,
+	TEST_GATEWAY_RECORD_EMPTY,
+	TEST_GATEWAY_RECORD_RECONNECT,
 	TEST_GATEWAY_WRONG_SUBTYPE,
 	TEST_GATEWAY_WRONG_LENGTH,
 	TEST_GATEWAY_WRONG_SN,
@@ -37,6 +39,7 @@ struct test_gateway {
 	size_t expected_plaintext_len;
 	size_t record_data_len;
 	size_t record_count;
+	size_t connection_count;
 	uint8_t record_data[4096];
 	struct k_sem done;
 	struct k_sem record_ready;

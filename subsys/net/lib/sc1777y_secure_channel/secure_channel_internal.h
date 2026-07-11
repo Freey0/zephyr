@@ -24,6 +24,7 @@ int sc1777y_secure_socket_send_all(struct sc1777y_secure_channel *channel,
 int sc1777y_secure_socket_recv_exact(struct sc1777y_secure_channel *channel,
 				     uint8_t *data, size_t len);
 void sc1777y_secure_socket_close(struct sc1777y_secure_channel *channel);
+void sc1777y_secure_channel_clear_rx(struct sc1777y_secure_channel *channel);
 int sc1777y_secure_channel_fail(struct sc1777y_secure_channel *channel, int ret);
 int sc1777y_secure_handshake(struct sc1777y_secure_channel *channel);
 

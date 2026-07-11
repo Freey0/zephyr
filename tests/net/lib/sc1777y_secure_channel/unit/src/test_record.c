@@ -185,4 +185,52 @@ ZTEST(sc1777y_secure_record, test_recv_returns_zero_when_peer_closes_mid_record)
 	test_gateway_wait(&gateway);
 }
 
+ZTEST(sc1777y_secure_record, test_explicit_close_clears_cached_plaintext_before_reconnect)
+{
+	static const uint8_t old_plaintext[] = "old-data";
+	uint8_t first[3];
+	int reconnect_ret;
+
+	test_gateway_start(&gateway, TEST_GATEWAY_RECORD_RECONNECT);
+	connect_channel();
+	test_gateway_queue_plaintext(&gateway, old_plaintext, sizeof(old_plaintext) - 1U);
+	zassert_equal(sizeof(first),
+		      sc1777y_secure_channel_recv(&channel, first, sizeof(first), true));
+	zassert_mem_equal("old", first, sizeof(first));
+	zassert_ok(sc1777y_secure_channel_close(&channel));
+	zassert_ok(sc1777y_secure_channel_connect(&channel));
+	reconnect_ret = sc1777y_secure_channel_recv(&channel, output, sizeof(output), false);
+	zassert_ok(sc1777y_secure_channel_close(&channel));
+	test_gateway_wait(&gateway);
+
+	zassert_equal(-EAGAIN, reconnect_ret);
+	zassert_equal(0, channel.header_used);
+	zassert_equal(0, channel.record_used);
+	zassert_equal(0, channel.plain_offset);
+	zassert_equal(0, channel.plain_len);
+	zassert_equal(0, channel.rx_record[0]);
+	zassert_equal(0, channel.plain_cache[0]);
+}
+
+ZTEST(sc1777y_secure_record, test_recv_rejects_padding_only_record)
+{
+	enum sc1777y_secure_channel_state state;
+	int socket_fd;
+	int ret;
+
+	test_gateway_start(&gateway, TEST_GATEWAY_RECORD_EMPTY);
+	connect_channel();
+	ret = sc1777y_secure_channel_recv(&channel, output, sizeof(output), true);
+	state = sc1777y_secure_channel_get_state(&channel);
+	socket_fd = channel.socket_fd;
+	if (socket_fd >= 0) {
+		zassert_ok(sc1777y_secure_channel_close(&channel));
+	}
+	test_gateway_wait(&gateway);
+
+	zassert_equal(-EBADMSG, ret);
+	zassert_equal(SC1777Y_SECURE_CHANNEL_FAILED, state);
+	zassert_equal(-1, socket_fd);
+}
+
 ZTEST_SUITE(sc1777y_secure_record, NULL, NULL, NULL, NULL, NULL);

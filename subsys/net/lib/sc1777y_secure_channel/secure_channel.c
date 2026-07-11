@@ -26,6 +26,17 @@ static int validate_gateway(const struct sockaddr *gateway, socklen_t gateway_le
 	}
 }
 
+void sc1777y_secure_channel_clear_rx(struct sc1777y_secure_channel *channel)
+{
+	memset(channel->rx_record, 0, sizeof(channel->rx_record));
+	memset(channel->plain_cache, 0, sizeof(channel->plain_cache));
+	channel->header_used = 0U;
+	channel->record_expected = 0U;
+	channel->record_used = 0U;
+	channel->plain_offset = 0U;
+	channel->plain_len = 0U;
+}
+
 int sc1777y_secure_channel_init(struct sc1777y_secure_channel *channel,
 				const struct sc1777y_secure_channel_config *config)
 {
@@ -68,11 +79,7 @@ int sc1777y_secure_channel_init(struct sc1777y_secure_channel *channel,
 	k_mutex_init(&channel->tx_lock);
 	k_mutex_init(&channel->rx_lock);
 	k_mutex_init(&channel->crypto_lock);
-	channel->header_used = 0U;
-	channel->record_expected = 0U;
-	channel->record_used = 0U;
-	channel->plain_offset = 0U;
-	channel->plain_len = 0U;
+	sc1777y_secure_channel_clear_rx(channel);
 
 	return 0;
 }
@@ -86,13 +93,7 @@ sc1777y_secure_channel_get_state(const struct sc1777y_secure_channel *channel)
 int sc1777y_secure_channel_fail(struct sc1777y_secure_channel *channel, int ret)
 {
 	sc1777y_secure_socket_close(channel);
-	memset(channel->rx_record, 0, sizeof(channel->rx_record));
-	memset(channel->plain_cache, 0, sizeof(channel->plain_cache));
-	channel->header_used = 0U;
-	channel->record_expected = 0U;
-	channel->record_used = 0U;
-	channel->plain_offset = 0U;
-	channel->plain_len = 0U;
+	sc1777y_secure_channel_clear_rx(channel);
 	channel->state = SC1777Y_SECURE_CHANNEL_FAILED;
 	return ret;
 }
@@ -131,6 +132,7 @@ int sc1777y_secure_channel_close(struct sc1777y_secure_channel *channel)
 	}
 
 	sc1777y_secure_socket_close(channel);
+	sc1777y_secure_channel_clear_rx(channel);
 	channel->state = SC1777Y_SECURE_CHANNEL_CLOSED;
 	return 0;
 }

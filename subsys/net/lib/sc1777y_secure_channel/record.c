@@ -114,11 +114,7 @@ static int socket_recv(struct sc1777y_secure_channel *channel, uint8_t *data, si
 		}
 		if (ret == 0) {
 			sc1777y_secure_socket_close(channel);
-			memset(channel->rx_record, 0, sizeof(channel->rx_record));
-			memset(channel->plain_cache, 0, sizeof(channel->plain_cache));
-			reset_record_state(channel);
-			channel->plain_offset = 0U;
-			channel->plain_len = 0U;
+			sc1777y_secure_channel_clear_rx(channel);
 			channel->state = SC1777Y_SECURE_CHANNEL_CLOSED;
 			return 0;
 		}
@@ -200,6 +196,10 @@ static int decrypt_record(struct sc1777y_secure_channel *channel)
 	if (ret < 0) {
 		memset(record_body, 0, decrypted_len);
 		return ret;
+	}
+	if (plain_len == 0U) {
+		memset(record_body, 0, decrypted_len);
+		return -EBADMSG;
 	}
 
 	memcpy(channel->plain_cache, record_body, plain_len);
