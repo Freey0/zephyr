@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -17,6 +19,12 @@ HOST_DIR = Path(__file__).resolve().parents[2] / "host"
 sys.path.insert(0, str(HOST_DIR))
 
 from security_gateway_peer import SecurityGatewayPeer  # noqa: E402
+
+LOGGER = logging.getLogger(__name__)
+
+
+class TapFixtureError(RuntimeError):
+    """A diagnostic failure while creating, validating, or removing the TAP."""
 
 
 class _TcpEchoService:
@@ -74,12 +82,101 @@ def _run_net_setup(script: Path, action: str) -> None:
             timeout=20.0,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
-        pytest.fail(f"net-setup.sh {action} could not run: {error}")
+        raise TapFixtureError(f"net-setup.sh {action} could not run: {error}") from error
     if result.returncode != 0:
-        pytest.fail(
+        raise TapFixtureError(
             f"net-setup.sh {action} failed with {result.returncode}: "
             f"{result.stdout}{result.stderr}"
         )
+
+
+def _run_ip_query(ip_tool: str, arguments: list[str], description: str) -> str:
+    command = [ip_tool, *arguments]
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise TapFixtureError(f"could not verify {description}: {error}") from error
+    if result.returncode != 0:
+        raise TapFixtureError(
+            f"could not verify {description}; {' '.join(command)} returned "
+            f"{result.returncode}: {result.stdout}{result.stderr}"
+        )
+    return result.stdout
+
+
+def _verify_tap() -> None:
+    ip_tool = shutil.which("ip")
+    if ip_tool is None:
+        raise TapFixtureError("the 'ip' tool is required to verify TAP setup")
+
+    link = _run_ip_query(ip_tool, ["-o", "link", "show", "dev", "zeth"], "TAP zeth")
+    if "zeth" not in link:
+        raise TapFixtureError(f"net-setup.sh reported success but TAP zeth is absent: {link!r}")
+
+    addresses = _run_ip_query(
+        ip_tool,
+        ["-o", "-4", "addr", "show", "dev", "zeth"],
+        "IPv4 address on TAP zeth",
+    )
+    if "inet 192.0.2.2/24" not in addresses:
+        raise TapFixtureError(
+            "net-setup.sh reported success but zeth does not have 192.0.2.2/24: "
+            f"{addresses!r}"
+        )
+
+
+class _SecureGatewayEnvironment:
+    def __init__(self, setup_script: Path) -> None:
+        self.setup_script = setup_script
+        self.tap_start_attempted = False
+        self.echo: _TcpEchoService | None = None
+        self.gateway: SecurityGatewayPeer | None = None
+
+    def start(self) -> SecurityGatewayPeer:
+        self.tap_start_attempted = True
+        _run_net_setup(self.setup_script, "start")
+        _verify_tap()
+
+        self.echo = _TcpEchoService()
+        self.echo.start()
+        self.gateway = SecurityGatewayPeer(("192.0.2.2", 18883), self.echo.address)
+        self.gateway.start()
+        return self.gateway
+
+    def stop(self) -> list[str]:
+        errors: list[str] = []
+
+        if self.gateway is not None:
+            try:
+                self.gateway.stop()
+            except BaseException as error:
+                errors.append(f"security gateway stop failed: {error!r}")
+            errors.extend(
+                f"security gateway worker failed: {error!r}"
+                for error in self.gateway.errors
+            )
+
+        if self.echo is not None:
+            try:
+                self.echo.stop()
+            except BaseException as error:
+                errors.append(f"TCP echo stop failed: {error!r}")
+            if self.echo.error is not None:
+                errors.append(f"TCP echo worker failed: {self.echo.error!r}")
+
+        if self.tap_start_attempted:
+            try:
+                _run_net_setup(self.setup_script, "stop")
+            except BaseException as error:
+                errors.append(f"TAP cleanup failed: {error!r}")
+
+        return errors
 
 
 @pytest.fixture()
@@ -91,22 +188,21 @@ def secure_gateway() -> Generator[SecurityGatewayPeer, None, None]:
     if not setup_script.is_file() or not os.access(setup_script, os.X_OK):
         pytest.fail(f"required executable does not exist: {setup_script}")
 
-    setup_started = False
-    echo = _TcpEchoService()
-    gateway: SecurityGatewayPeer | None = None
+    environment = _SecureGatewayEnvironment(setup_script)
+    primary_error: BaseException | None = None
     try:
-        _run_net_setup(setup_script, "start")
-        setup_started = True
-        echo.start()
-        gateway = SecurityGatewayPeer(("192.0.2.2", 18883), echo.address)
-        gateway.start()
+        try:
+            gateway = environment.start()
+        except BaseException as error:
+            pytest.fail(f"secure gateway setup failed: {error!r}", pytrace=False)
         yield gateway
-        gateway.raise_if_failed()
-        if echo.error is not None:
-            raise RuntimeError("TCP echo service failed") from echo.error
+    except BaseException as error:
+        primary_error = error
+        raise
     finally:
-        if gateway is not None:
-            gateway.stop()
-        echo.stop()
-        if setup_started:
-            _run_net_setup(setup_script, "stop")
+        cleanup_errors = environment.stop()
+        if cleanup_errors:
+            details = "; ".join(cleanup_errors)
+            if primary_error is None:
+                pytest.fail(f"secure gateway cleanup failed: {details}", pytrace=False)
+            LOGGER.error("secure gateway cleanup also failed: %s", details)
