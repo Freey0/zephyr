@@ -76,8 +76,13 @@ class ReconnectableSecurityGatewayPeer(SecurityGatewayPeer):
                 self._terminal_condition.wait(remaining)
             terminal = self._controlled_terminal
 
-        with suppress(OSError):
+        try:
             terminal.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            with self._terminal_condition:
+                if self._controlled_terminal is terminal:
+                    raise
+            return
 
         with self._terminal_condition:
             while self._controlled_terminal is terminal:

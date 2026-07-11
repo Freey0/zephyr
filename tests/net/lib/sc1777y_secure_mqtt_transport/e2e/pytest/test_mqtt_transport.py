@@ -5,6 +5,7 @@ import socket
 import threading
 
 import conftest
+import pytest
 from twister_harness import DeviceAdapter
 
 
@@ -120,6 +121,45 @@ def test_controlled_disconnect_does_not_hide_worker_error(monkeypatch) -> None:
         release_timer.join(timeout=0.5)
         terminal.close()
         peer.close()
+
+
+def test_controlled_disconnect_reports_active_terminal_shutdown_error() -> None:
+    gateway = conftest.ReconnectableSecurityGatewayPeer(
+        listen_addr=("127.0.0.1", 0), upstream_addr=("127.0.0.1", 1)
+    )
+    shutdown_error = OSError("injected terminal shutdown failure")
+
+    class FailingTerminal:
+        def shutdown(self, how: int) -> None:
+            assert how == socket.SHUT_RDWR
+            raise shutdown_error
+
+    terminal = FailingTerminal()
+    gateway._set_controlled_terminal(terminal)
+
+    with pytest.raises(OSError) as raised:
+        gateway.disconnect_terminal(timeout=0.01)
+
+    assert raised.value is shutdown_error
+
+
+def test_shutdown_error_is_ignored_after_worker_replaces_terminal() -> None:
+    gateway = conftest.ReconnectableSecurityGatewayPeer(
+        listen_addr=("127.0.0.1", 0), upstream_addr=("127.0.0.1", 1)
+    )
+    replacement = object()
+
+    class RetiredTerminal:
+        def shutdown(self, how: int) -> None:
+            assert how == socket.SHUT_RDWR
+            gateway._set_controlled_terminal(replacement)
+            raise OSError("retired terminal shutdown raced with worker")
+
+    gateway._set_controlled_terminal(RetiredTerminal())
+
+    gateway.disconnect_terminal(timeout=0.01)
+
+    assert gateway._controlled_terminal is replacement
 
 
 def test_secure_mqtt_reconnects_with_fresh_security_handshake(
