@@ -3,6 +3,7 @@
 
 tests:
   net.lib.sc1777y_secure_mqtt_transport.unit:
+    harness: ztest
     integration_platforms:
       - native_sim
     platform_allow:

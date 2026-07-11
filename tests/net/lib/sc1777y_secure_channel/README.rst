@@ -43,3 +43,12 @@ The end-to-end application reaches ``SecurityGatewayPeer`` at
 terminates the deterministic secure protocol and forwards plaintext to a
 host TCP echo service.  The SC1777Y SPI emulator remains behind the public
 driver API and is not controlled or inspected by this test.
+
+Combined secure MQTT gate
+-------------------------
+
+After enabling the MQTT custom transport, use the mandatory combined gate in
+``tests/net/lib/sc1777y_secure_mqtt_transport/README.rst``.  That command runs
+this phase-one unit suite and TAP echo end-to-end test together with the
+phase-two adapter unit suite and real-Mosquitto TAP end-to-end test.  Neither
+end-to-end case may be filtered or skipped in a release-gate run.

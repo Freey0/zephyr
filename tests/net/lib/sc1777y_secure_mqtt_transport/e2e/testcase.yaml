@@ -15,5 +15,6 @@ tests:
     tags:
       - net
       - mqtt
+      - pytest
       - sc1777y
     timeout: 60
