@@ -1,4 +1,3 @@
-###################################
 SC1777Y secure MQTT transport tests
 ###################################
 
@@ -20,7 +19,6 @@ filter, ``--build-only``, or any other option that omits either case.  A
 missing host dependency or insufficient privilege is a failed gate, not a
 skip or successful run.
 
-******************
 Host prerequisites
 ******************
 

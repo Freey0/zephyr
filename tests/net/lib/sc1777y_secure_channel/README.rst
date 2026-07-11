@@ -1,4 +1,3 @@
-############################
 SC1777Y secure-channel tests
 ############################
 
@@ -15,7 +14,6 @@ The TAP end-to-end case is mandatory.  Do not filter or skip it, and do not
 treat a missing host dependency or insufficient privilege as a successful
 test run.
 
-******************
 Host prerequisites
 ******************
 
@@ -46,7 +44,6 @@ terminates the deterministic secure protocol and forwards plaintext to a
 host TCP echo service.  The SC1777Y SPI emulator remains behind the public
 driver API and is not controlled or inspected by this test.
 
-*************************
 Combined secure MQTT gate
 *************************
 
