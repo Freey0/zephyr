@@ -8,6 +8,8 @@ tests:
       pytest_root:
         - pytest
       pytest_dut_scope: function
+    integration_platforms:
+      - native_sim
     platform_allow:
       - native_sim
     tags:
