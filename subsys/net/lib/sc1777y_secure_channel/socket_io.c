@@ -133,7 +133,7 @@ int sc1777y_secure_socket_connect(struct sc1777y_secure_channel *channel)
 
 	ret = zsock_connect(channel->socket_fd, channel->config.gateway,
 			    channel->config.gateway_len);
-	if ((ret < 0) && (errno != EINPROGRESS) && (errno != EALREADY)) {
+	if ((ret < 0) && (errno != EINPROGRESS) && (errno != EALREADY) && (errno != EINTR)) {
 		ret = socket_error();
 		goto out;
 	}
