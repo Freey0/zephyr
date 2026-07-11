@@ -48,7 +48,10 @@ enum sc1777y_secure_channel_state {
  * The configuration is copied by @ref sc1777y_secure_channel_init. The gateway
  * socket address itself is also copied. The caller retains ownership of the
  * certificate, platform public key, and optional interface-name buffers and
- * must keep them valid and unchanged until the channel is closed.
+ * must keep them valid and unchanged through every connect attempt. This
+ * includes a reconnect from the closed state; release them only when the
+ * context will no longer be connected again or has been reinitialized with
+ * replacement buffers.
  */
 struct sc1777y_secure_channel_config {
 	/** Ready SC1777Y device used for negotiation and record cryptography. */
