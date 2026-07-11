@@ -22,6 +22,7 @@ add_subdirectory_ifdef(CONFIG_PROMETHEUS             prometheus)
 add_subdirectory_ifdef(CONFIG_WIFI_CREDENTIALS       wifi_credentials)
 add_subdirectory_ifdef(CONFIG_OCPP ocpp)
 add_subdirectory_ifdef(CONFIG_NETMIDI2_HOST          midi2)
+add_subdirectory_ifdef(CONFIG_SC1777Y_SECURE_CHANNEL sc1777y_secure_channel)
 
 if(CONFIG_NET_DHCPV4 OR CONFIG_NET_DHCPV4_SERVER)
   add_subdirectory(dhcpv4)

@@ -1,0 +1,11 @@
+# SC1777Y secure channel library configuration options
+
+# SPDX-License-Identifier: Apache-2.0
+
+config SC1777Y_SECURE_CHANNEL
+	bool "SC1777Y secure channel"
+	depends on SC1777Y
+	depends on NETWORKING
+	depends on NET_SOCKETS
+	help
+	  Enable the SC1777Y-backed secure channel library.
