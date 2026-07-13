@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+
+description: SC1777Y security chip
+
+properties:
+  reset-gpios:
+    type: phandle-array
+    description: Optional reset or power-control GPIO for board integrations.

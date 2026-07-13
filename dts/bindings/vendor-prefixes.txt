@@ -638,6 +638,7 @@ silex-insight	Silex Insight
 siliconfile	Siliconfile Technologies lnc.
 siliconmitus	Silicon Mitus, Inc.
 silvaco	Silvaco, Inc.
+senscomm	Senscomm Semiconductor Co., Ltd.
 simcom	SIMCom Wireless Solutions Co., LTD
 simtek	Cypress Semiconductor Corporation (Simtek Corporation)
 sinlinx	Sinlinx Electronics Technology Co., LTD

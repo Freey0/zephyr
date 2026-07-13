@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+
+description: SC1777Y security chip on SPI
+
+compatible: "senscomm,sc1777y"
+
+include:
+  - spi-device.yaml
+  - sc1777y.yaml

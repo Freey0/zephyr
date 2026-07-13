@@ -1,0 +1,15 @@
+sample:
+  name: SC1777Y driver flow guide
+tests:
+  sample.drivers.sc1777y:
+    platform_allow:
+      - native_sim
+    tags:
+      - drivers
+      - misc
+      - spi
+    harness: console
+    harness_config:
+      type: one_line
+      regex:
+        - "SC1777Y sample PASS"

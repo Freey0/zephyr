@@ -1,0 +1,18 @@
+/*
+ * SPDX-FileCopyrightText: Copyright The Zephyr Project Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	aliases {
+		sc1777y-0 = &sc1777y0;
+	};
+};
+
+&spi0 {
+	sc1777y0: sc1777y@0 {
+		compatible = "senscomm,sc1777y";
+		reg = <0>;
+		spi-max-frequency = <1000000>;
+	};
+};

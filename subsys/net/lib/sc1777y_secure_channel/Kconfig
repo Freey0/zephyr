@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Copyright The Zephyr Project Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# SC1777Y secure channel library configuration options
+
+config SC1777Y_SECURE_CHANNEL
+	bool "SC1777Y secure channel"
+	depends on SC1777Y
+	depends on NETWORKING
+	depends on NET_SOCKETS
+	select NET_CONTEXT_RCVTIMEO
+	select NET_CONTEXT_SNDTIMEO
+	help
+	  Enable the SC1777Y-backed secure channel library.
+
+config SC1777Y_SECURE_CHANNEL_MQTT
+	bool "SC1777Y secure channel MQTT custom transport"
+	depends on SC1777Y_SECURE_CHANNEL
+	depends on MQTT_LIB
+	depends on MQTT_LIB_CUSTOM_TRANSPORT
+	help
+	  Enable the thin MQTT custom transport adapter for the SC1777Y-backed
+	  secure channel library.

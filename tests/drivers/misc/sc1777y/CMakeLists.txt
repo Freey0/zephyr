@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+
+cmake_minimum_required(VERSION 3.20.0)
+find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
+project(sc1777y)
+
+target_include_directories(app PRIVATE include)
+target_sources(app PRIVATE src/fixture.c src/protocol.c src/api_errors.c src/api_basic.c
+			   src/api_sensor.c src/api_update.c src/api_platform.c)
